@@ -1,9 +1,7 @@
-name: Build for SFOS 4.5.0.21
+name: Build gecko-dev immediately
 
 on:
-  pull_request:
-    branches:
-      - default
+  workflow_dispatch:
 
 env:
   SFOS_RELEASE: 4.5.0.21
@@ -20,32 +18,12 @@ jobs:
     - name: Prepare
       run: mkdir -p RPMS
       
-    - name: ARM64 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
-      env:
-        ARCH: aarch64
-        RELEASE: ${{ env.SFOS_RELEASE }}
+    - name: Build
       uses: robang74/github-sfos-apps-build@master
       with:
-        release: ${{ env.RELEASE }}
+        release: ${{ env.SFOS_RELEASE }}
         arch: ${{ env.ARCH }}
-
-    - name: ARMv7 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
-      env:
-        ARCH: armv7hl
-        RELEASE: ${{ env.SFOS_RELEASE }}
-      uses: robang74/github-sfos-apps-build@master
-      with:
-        release: ${{ env.RELEASE }}
-        arch: ${{ env.ARCH }}
-
-    - name: AMD86 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
-      env:
-        ARCH: i486
-        RELEASE: ${{ env.SFOS_RELEASE }}
-      uses: robang74/github-sfos-apps-build@master
-      with:
-        release: ${{ env.RELEASE }}
-        arch: ${{ env.ARCH }}
+        spec_file: rpm/xulrunner-qt5.spec
 
     - name: Upload build results
       uses: actions/upload-artifact@v3
