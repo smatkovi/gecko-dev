@@ -20,5 +20,3 @@ jobs:
         with:
           repo: https://github.com/sailfishos/gecko-dev.git
           path: gecko-dev
-          dependencies:
-            - sailfishos/llvm
