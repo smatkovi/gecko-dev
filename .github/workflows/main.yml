@@ -1,22 +1,57 @@
 name: Build gecko-dev
 
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
-      - master
+      - default
+  workflow_dispatch:
+    branches:
+      - default
+
+env:
+  SFOS_RELEASE: 4.5.0.16
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-22.04
+    env:
+      SEGMENT_DOWNLOAD_TIMEOUT_MINS: 2
     steps:
-      - uses: actions/checkout@v2
+    - name: Checkout
+      uses: actions/checkout@v3
 
-      - name: Build
-        uses: robang74/github-sfos-apps-build@v1
-        with:
-          repo: https://github.com/sailfishos/gecko-dev.git
-          path: gecko-dev
+    - name: Prepare
+      run: mkdir -p RPMS
+      
+    - name: ARM64 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
+      env:
+        ARCH: aarch64
+        RELEASE: ${{ env.SFOS_RELEASE }}
+      uses: robang74/github-sfos-apps-build@master
+      with:
+        release: ${{ env.RELEASE }}
+        arch: ${{ env.ARCH }}
+
+    - name: ARMv7 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
+      env:
+        ARCH: armv7hl
+        RELEASE: ${{ env.SFOS_RELEASE }}
+      uses: robang74/github-sfos-apps-build@master
+      with:
+        release: ${{ env.RELEASE }}
+        arch: ${{ env.ARCH }}
+
+    - name: AMD86 build for ${{ env.ARCH }} on ${{ env.RELEASE }}
+      env:
+        ARCH: i486
+        RELEASE: ${{ env.SFOS_RELEASE }}
+      uses: robang74/github-sfos-apps-build@master
+      with:
+        release: ${{ env.RELEASE }}
+        arch: ${{ env.ARCH }}
+
+    - name: Upload build results
+      uses: actions/upload-artifact@v3
+      with:
+        name: RPMS build results
+        path: RPMS
