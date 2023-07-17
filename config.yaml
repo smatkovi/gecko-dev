@@ -1,0 +1,24 @@
+name: Build gecko-dev
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Build
+        uses: robang74/github-sfos-apps-build@v1
+        with:
+          repo: https://github.com/sailfishos/gecko-dev.git
+          path: gecko-dev
+          dependencies:
+            - sailfishos/llvm
