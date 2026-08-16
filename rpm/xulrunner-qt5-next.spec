@@ -46,7 +46,7 @@
 %bcond_with git_workaround
 
 
-Name:       xulrunner-qt5
+Name:       xulrunner-qt5-next
 Summary:    XUL runner
 Version:    %{greversion}
 Release:    1
