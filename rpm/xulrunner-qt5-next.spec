@@ -361,7 +361,7 @@ done
 %__mv %_builddir/.git %_builddir/.git-disabled ||:
 %endif
 
-source "%BUILD_DIR"/rpm-shared.env
+[ -f "%BUILD_DIR"/rpm-shared.env ] && source "%BUILD_DIR"/rpm-shared.env || true
 
 %ifarch %ix86
 # Clang cannot infer Sailfish's GCC installation from Gecko's generic i686
@@ -529,7 +529,7 @@ export MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=system
 %endif
 
 %install
-source "%BUILD_DIR"/rpm-shared.env
+[ -f "%BUILD_DIR"/rpm-shared.env ] && source "%BUILD_DIR"/rpm-shared.env || true
 %ifarch %arm32
 export SB2_RUST_TARGET_TRIPLE=armv7-unknown-linux-gnueabihf
 %endif
