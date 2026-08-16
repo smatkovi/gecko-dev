@@ -146,3 +146,4 @@ lextab.py
 .vscode/*
 !.vscode/extensions.json
 !.vscode/tasks.json
+RPMS/
