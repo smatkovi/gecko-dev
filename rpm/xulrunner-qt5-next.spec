@@ -535,6 +535,25 @@ export SB2_RUST_TARGET_TRIPLE=aarch64-unknown-linux-gnu
 
 %{__make} -C %BUILD_DIR/mobile/sailfishos/installer install DESTDIR=%{buildroot}
 
+# fork: make install nutzt --with-app-name=xulrunner-qt5 (mozconfig Z.41);
+# Verzeichnisse auf %{name} umziehen und .pc-Pfade angleichen.
+if [ "%{name}" != "xulrunner-qt5" ]; then
+  if [ -d ${RPM_BUILD_ROOT}%{_libdir}/xulrunner-qt5-devel-%{greversion} ]; then
+    mv ${RPM_BUILD_ROOT}%{_libdir}/xulrunner-qt5-devel-%{greversion} ${RPM_BUILD_ROOT}%{mozappdirdev}
+  fi
+  if [ -d ${RPM_BUILD_ROOT}%{_libdir}/xulrunner-qt5-%{greversion} ]; then
+    mv ${RPM_BUILD_ROOT}%{_libdir}/xulrunner-qt5-%{greversion} ${RPM_BUILD_ROOT}%{mozappdir}
+  fi
+  if [ -d ${RPM_BUILD_ROOT}%{_includedir}/xulrunner-qt5-%{greversion} ]; then
+    mv ${RPM_BUILD_ROOT}%{_includedir}/xulrunner-qt5-%{greversion} ${RPM_BUILD_ROOT}%{_includedir}/%{name}-%{greversion}
+  fi
+  if [ -d ${RPM_BUILD_ROOT}%{_datadir}/idl/xulrunner-qt5-%{greversion} ]; then
+    mv ${RPM_BUILD_ROOT}%{_datadir}/idl/xulrunner-qt5-%{greversion} ${RPM_BUILD_ROOT}%{_datadir}/idl/%{name}-%{greversion}
+  fi
+  sed -i 's|xulrunner-qt5-devel-%{greversion}|%{name}-devel-%{greversion}|g' ${RPM_BUILD_ROOT}%{_libdir}/pkgconfig/*.pc
+  sed -i 's|xulrunner-qt5-%{greversion}|%{name}-%{greversion}|g' ${RPM_BUILD_ROOT}%{_libdir}/pkgconfig/*.pc
+fi
+
 rm -rf ${RPM_BUILD_ROOT}%{mozappdirdev}/sdk/lib/libxul.so
 ln -s %{mozappdir}/libxul.so ${RPM_BUILD_ROOT}%{mozappdirdev}/sdk/lib/libxul.so
 
