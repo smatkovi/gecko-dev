@@ -136,9 +136,9 @@ Patch104:    0104-sailfishos-egl-Define-platform-image-import-targets.patch
 Patch105:    0105-sailfishos-build-Avoid-WebIDL-fork-pools-under-QEMU.patch
 Patch106:    0106-sailfishos-embedlite-Export-embedding-entry-point.patch
 
-BuildRequires:  rust >= 1.82.0
-BuildRequires:  rust-std-static >= 1.82.0
-BuildRequires:  cargo >= 1.82.0
+BuildRequires:  rust >= 1.75.0
+BuildRequires:  rust-std-static >= 1.75.0
+BuildRequires:  cargo >= 1.75.0
 BuildRequires:  pkgconfig(Qt5Quick)
 BuildRequires:  pkgconfig(Qt5Network)
 BuildRequires:  pkgconfig(Qt5Widgets)
@@ -179,7 +179,7 @@ BuildRequires:  python3-devel
 BuildRequires:  zip
 BuildRequires:  unzip
 BuildRequires:  qt5-plugin-platform-minimal
-BuildRequires:  cbindgen >= 0.27.0
+BuildRequires:  cbindgen >= 0.24.0
 BuildRequires:  llvm
 BuildRequires:  clang-devel
 BuildRequires:  libatomic
