@@ -18,7 +18,6 @@ ac_add_options --libdir="$LIBDIR"
 
 ac_add_options --with-system-jpeg
 ac_add_options --with-system-nspr
-ac_add_options --with-system-nss
 
 ac_add_options --with-gl-provider=EGL
 
