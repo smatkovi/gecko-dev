@@ -573,7 +573,7 @@ mkdir ${RPM_BUILD_ROOT}%{mozappdir}/defaults
 # symlink to the system libnssckbi.so (CA trust library). It is replaced by
 # the p11-kit-nss-ckbi package to use p11-kit's trust store.
 # There is a strong binary compatibility guarantee.
-rm ${RPM_BUILD_ROOT}%{mozappdir}/libnssckbi.so
+rm -f ${RPM_BUILD_ROOT}%{mozappdir}/libnssckbi.so
 ln -s %{_libdir}/libnssckbi.so ${RPM_BUILD_ROOT}%{mozappdir}/libnssckbi.so
 %endif
 
