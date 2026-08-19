@@ -41,6 +41,7 @@
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Document.h"
+#include "nsContentUtils.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/LoadURIOptionsBinding.h"
 #include "mozilla/dom/MouseEventBinding.h"
@@ -586,9 +587,39 @@ mozilla::ipc::IPCResult EmbedLiteViewChild::RecvSetIsActive(const bool &aIsActiv
 
   presShell->SetIsActive(aIsActive);
 
+  if (aIsActive && !presShell->DidInitialize()) {
+    // EmbedLite-140: InitPresentationStuff(false)-Pfad baut die Shell ohne
+    // Initial-Reflow; ohne Initialize bleibt IsRenderingSuppressed ewig true.
+    nsAutoScriptBlocker scriptBlocker;
+    gfxCriticalNote << "EL-FIX PresShell::Initialize nachgeholt";
+    Unused << presShell->Initialize();
+  }
+
   mWidget->Show(aIsActive);
   mWebBrowser->SetVisibility(aIsActive);
 
+  {
+    dom::Document* doc = presShell->GetDocument();
+    nsGlobalWindowInner* inw = mDOMWindow ? nsGlobalWindowInner::Cast(mDOMWindow->GetCurrentInnerWindow()) : nullptr;
+    RefPtr<dom::BrowsingContext> bc = docShell->GetBrowsingContext();
+    LOGT("EL-VIS after-set req=%d shellActive=%d docHidden=%d bcActive=%d bcExplicit=%d outerBg=%d allowJS=%d frz=%d susp=%d evSup=%u",
+         aIsActive, presShell->IsActive(), doc ? (int)doc->Hidden() : -1,
+         bc ? (int)bc->IsActive() : -1, bc ? (int)bc->GetExplicitActive() : -1,
+         mDOMWindow ? (int)mDOMWindow->IsBackground() : -1,
+         bc ? (int)bc->GetAllowJavascript() : -1,
+         inw ? (int)inw->IsFrozen() : -1, inw ? (int)inw->IsSuspended() : -1,
+         doc ? doc->EventHandlingSuppressed() : 999);
+  }
+  if (aIsActive) {
+    RefPtr<PresShell> ps = presShell;
+    NS_DelayedDispatchToCurrentThread(NS_NewRunnableFunction("EL-VIS-DELAYED", [ps]() {
+      dom::Document* d2 = ps->GetDocument();
+      nsGlobalWindowInner* i2 = (d2 && d2->GetInnerWindow()) ? nsGlobalWindowInner::Cast(d2->GetInnerWindow()) : nullptr;
+      LOGT("EL-VIS-DELAYED docHidden=%d shellActive=%d frz=%d susp=%d evSup=%u didInit=%d supRD=%d", d2 ? (int)d2->Hidden() : -1, (int)ps->IsActive(),
+           i2 ? (int)i2->IsFrozen() : -1, i2 ? (int)i2->IsSuspended() : -1, d2 ? d2->EventHandlingSuppressed() : 999,
+           (int)ps->DidInitialize(), d2 ? (int)d2->IsRenderingSuppressed() : -1);
+    }), 800);
+  }
   if (aIsActive) {
     RecvScheduleUpdate();
   }

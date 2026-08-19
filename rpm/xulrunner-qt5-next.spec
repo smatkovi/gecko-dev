@@ -564,6 +564,7 @@ ln -s %{mozappdir}/libxul.so ${RPM_BUILD_ROOT}%{mozappdirdev}/sdk/lib/libxul.so
 %fdupes -s %{buildroot}%{_includedir}
 %fdupes -s %{buildroot}%{_libdir}
 %{__chmod} +x %{buildroot}%{mozappdir}/*.so
+llvm-strip --strip-unneeded %{buildroot}%{mozappdir}/*.so %{buildroot}%{mozappdir}/xulrunner-qt5 %{buildroot}%{mozappdir}/plugin-container 2>/dev/null || true
 # Use the system hunspell dictionaries
 %{__rm} -rf ${RPM_BUILD_ROOT}%{mozappdir}/dictionaries
 ln -s %{_datadir}/myspell ${RPM_BUILD_ROOT}%{mozappdir}/dictionaries

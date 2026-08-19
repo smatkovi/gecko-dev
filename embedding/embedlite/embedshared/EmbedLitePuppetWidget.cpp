@@ -299,8 +299,9 @@ EmbedLitePuppetWidget::GetParentPuppetWidget() const
 bool
 EmbedLitePuppetWidget::NeedsPaint()
 {
-  // Widgets representing EmbedLite view and window don't need to paint anything.
-  if (Destroyed() || mView) {
+  // WR-140: Content-Paint laeuft ueber den ViewManager-Pfad; das alte
+  // '|| mView'-Gate (Layers-Aera) unterdrueckte jede Display-List.
+  if (Destroyed()) {
     return false;
   }
   return nsIWidget::NeedsPaint();

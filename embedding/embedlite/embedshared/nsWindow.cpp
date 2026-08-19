@@ -216,10 +216,15 @@ nsWindow::GetWindowRenderer()
 bool
 nsWindow::PreRender(mozilla::widget::WidgetRenderingContext *aContext)
 {
+  LOGT("PreRender cbp=%p", GetCompositorBridgeParent());
   MOZ_ASSERT(mWindow);
   Unused << aContext;
   if (!IsVisible() || !mActive) {
-    return false;
+    gfxCriticalNote << "EL-P PreRender gate vis=" << int(IsVisible()) << " act=" << int(mActive);
+    if (!GetCompositorBridgeParent()) {
+      return false;
+    }
+    // EmbedLite: CBP-getriebene (Force-)Frames nicht an Fenster-Heuristik scheitern lassen.
   }
 
   if (GetCompositorBridgeParent()) {
@@ -232,6 +237,7 @@ nsWindow::PreRender(mozilla::widget::WidgetRenderingContext *aContext)
 void
 nsWindow::PostRender(mozilla::widget::WidgetRenderingContext *aContext)
 {
+  LOGT("PostRender cbp=%p", GetCompositorBridgeParent());
   MOZ_ASSERT(mWindow);
   Unused << aContext;
 

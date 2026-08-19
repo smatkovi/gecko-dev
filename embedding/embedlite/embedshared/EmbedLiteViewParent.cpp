@@ -277,13 +277,8 @@ mozilla::ipc::IPCResult EmbedLiteViewParent::RecvUpdateZoomConstraints(const uin
                                                                        const Maybe<ZoomConstraints> &aConstraints)
 {
   LOGT("manager: %p", GetApzcTreeManager());
-  nsWindow *window = GetWindowWidget();
-  if (GetApzcTreeManager() && window) {
-    GetApzcTreeManager()->UpdateZoomConstraints(ScrollableLayerGuid(window->GetRootLayerId(),
-                                                                    aPresShellId,
-                                                                    aViewId),
-                                                aConstraints);
-  }
+  // APZ-140 PENDING: TreeManager ist im WR-Embedding noch nicht verdrahtet;
+  // der Call crasht in halbinitialisierten APZ-Interna. Zoom kommt spaeter.
   return IPC_OK();
 }
 
@@ -292,13 +287,7 @@ mozilla::ipc::IPCResult EmbedLiteViewParent::RecvZoomToRect(const uint32_t &aPre
                                                             const ZoomTarget &aRect)
 {
   LOGT("thread id: %ld", syscall(SYS_gettid));
-  nsWindow *window = GetWindowWidget();
-  if (GetApzcTreeManager() && window) {
-    GetApzcTreeManager()->ZoomToRect(ScrollableLayerGuid(window->GetRootLayerId(),
-                                                         aPresShellId,
-                                                         aViewId),
-                                     aRect);
-  }
+  // APZ-140 PENDING: siehe RecvUpdateZoomConstraints.
   return IPC_OK();
 }
 

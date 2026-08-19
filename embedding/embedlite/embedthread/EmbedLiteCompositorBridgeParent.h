@@ -72,6 +72,12 @@ private:
 
   uint32_t mWindowId;
   RefPtr<mozilla::gl::GLContext> mGLContext;
+
+public:
+  mozilla::gl::GLContext* PeekGLContext() { return mGLContext.get(); }
+  static mozilla::gl::GLContext* AnyLiveGLContext(EmbedLiteCompositorBridgeParent* aExcept);
+  void FullInvalidateOnCompositorThread();
+
   std::shared_ptr<mozilla::gl::SharedSurface> mFrontBuffer;
   RefPtr<CancelableRunnable> mCurrentCompositeTask;
   ScreenIntPoint mSurfaceOrigin;

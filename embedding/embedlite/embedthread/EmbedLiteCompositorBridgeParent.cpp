@@ -27,6 +27,23 @@ using namespace mozilla::gl;
 namespace mozilla {
 namespace embedlite {
 
+static nsTArray<EmbedLiteCompositorBridgeParent*>& LiveCompositors()
+{
+  static nsTArray<EmbedLiteCompositorBridgeParent*> sList;
+  return sList;
+}
+
+mozilla::gl::GLContext*
+EmbedLiteCompositorBridgeParent::AnyLiveGLContext(EmbedLiteCompositorBridgeParent* aExcept)
+{
+  for (EmbedLiteCompositorBridgeParent* c : LiveCompositors()) {
+    if (c != aExcept && c->PeekGLContext()) {
+      return c->PeekGLContext();
+    }
+  }
+  return nullptr;
+}
+
 EmbedLiteCompositorBridgeParent::EmbedLiteCompositorBridgeParent(uint32_t windowId,
                                                                  CompositorManagerParent* aManager,
                                                                  uint32_t aNamespace,
@@ -54,7 +71,13 @@ EmbedLiteCompositorBridgeParent::EmbedLiteCompositorBridgeParent(uint32_t window
   EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId);
   LOGT("this:%p, window:%p, sz[%i,%i]", this, parentWindow, aSurfaceSize.width, aSurfaceSize.height);
 
-  parentWindow->SetCompositor(this);
+  // Verdienstbasierte Uebergabe: Ctor registriert nur, wenn frei - der
+  // Present-Refresh uebertraegt das Amt, sobald der Neue ERFOLGREICH
+  // published (P4-Screen + EGLImage-Morph machen ihn dazu faehig).
+  if (!parentWindow->GetCompositor()) {
+    parentWindow->SetCompositor(this);
+  }
+  LiveCompositors().AppendElement(this);
   parentWindow->GetListener()->CompositorCreated();
 
   // Post open parent?
@@ -63,8 +86,15 @@ EmbedLiteCompositorBridgeParent::EmbedLiteCompositorBridgeParent(uint32_t window
 
 EmbedLiteCompositorBridgeParent::~EmbedLiteCompositorBridgeParent()
 {
-  LOGT("EmbedLiteCompositorBridgeParent::~EmbedLiteCompositorBridgeParent");
-  LOGT();
+  LOGT("EmbedLiteCompositorBridgeParent::~EmbedLiteCompositorBridgeParent this=%p", this);
+  LiveCompositors().RemoveElement(this);
+  // Registrierung zuruecknehmen - sonst zeigt der WindowParent auf einen
+  // toten Compositor und WithPlatformImage liefert ewig fb=0.
+  if (EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId)) {
+    if (parentWindow->GetCompositor() == this) {
+      parentWindow->SetCompositor(nullptr);
+    }
+  }
 }
 
 void
@@ -115,7 +145,7 @@ EmbedLiteCompositorBridgeParent::CompositeToDefaultTarget(WebRenderBridgeParent*
 bool
 EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
 {
-  LOGT("EmbedLiteCompositorBridgeParent::PresentOffscreenSurface");
+  LOGT("EmbedLiteCompositorBridgeParent::PresentOffscreenSurface this=%p", this);
   MOZ_ASSERT(wr::RenderThread::IsInRenderThread());
   RefPtr<GLContext> context;
   uint64_t generation;
@@ -124,7 +154,38 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
     context = mGLContext;
     generation = mPlatformImageGeneration;
   }
+  if (context && !context->Screen()) {
+    // Amtsnachfolger: RendererOGL hat den Kontext verdrahtet, aber der
+    // 0072-Screen entsteht nur im Ensure-Pfad des Erstlings. Nachziehen.
+    EnsureSurfaceSizeFromWindow();
+    gfx::IntSize sz;
+    {
+      MutexAutoLock lock(mRenderMutex);
+      sz = mEGLSurfaceSize;
+    }
+    if (!sz.IsEmpty() && context->MakeCurrent()) {
+      if (context->CreateOffscreenScreenBuffer(sz)) {
+        // GLScreenBuffer::Create startet mit SurfaceFactory_Basic (0072);
+        // fuer WithPlatformImage braucht der FrontBuffer die EGLImage-Factory.
+        if (gl::GLScreenBuffer* screen = context->Screen()) {
+          if (UniquePtr<gl::SurfaceFactory> factory =
+                  gl::SurfaceFactory_EGLImage::Create(*context)) {
+            screen->Morph(std::move(factory));
+          }
+        }
+        LOGT("EL-P4 screen created %dx%d this=%p", sz.width, sz.height, this);
+        // Frischer Screen ist leer - WebRender einmal anstossen,
+        // damit der Amtsinhaber echten Inhalt rendert statt Leere zu publishen.
+        if (nsIThread* ct = CompositorThread()) {
+          ct->Dispatch(NewRunnableMethod(
+              "EmbedLiteCompositorBridgeParent::FullInvalidateOnCompositorThread",
+              this, &EmbedLiteCompositorBridgeParent::FullInvalidateOnCompositorThread));
+        }
+      }
+    }
+  }
   if (!context || !context->Screen()) {
+    LOGT("EL-P1 no ctx/screen this=%p", this);
     MutexAutoLock lock(mRenderMutex);
     if (context == mGLContext) {
       mFrontBuffer.reset();
@@ -136,6 +197,7 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
   MOZ_ASSERT(screen);
 
   if (screen->Size().IsEmpty() || !screen->PublishFrame(screen->Size())) {
+    LOGT("EL-P2 publish failed this=%p", this);
     NS_ERROR("Failed to publish context frame");
     MutexAutoLock lock(mRenderMutex);
     if (context == mGLContext && generation == mPlatformImageGeneration) {
@@ -144,18 +206,31 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
     return false;
   }
 
+  // SYNC-PROBE (Holzhammer): Render-Fertigstellung erzwingen, bevor der
+  // FrontBuffer an den Konsumenten geht - Punkte-Muster = fehlende Fence.
+  context->fFinish();
   std::shared_ptr<SharedSurface> frontBuffer = screen->FrontBuffer();
   MutexAutoLock lock(mRenderMutex);
   if (context != mGLContext || generation != mPlatformImageGeneration) {
+    LOGT("EL-P3 generation/ctx race this=%p", this);
     return false;
   }
   mFrontBuffer = std::move(frontBuffer);
+  // Der publizierende Compositor ist der, den die App fragen soll.
+  if (EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId)) {
+    // Konservative Uebernahme: nur bei vakantem Amt (Dtor raeumt) - ein
+    // erfolgreicher Publish allein beweist keinen Inhalt (Boot-Regression).
+    if (!parentWindow->GetCompositor()) {
+      parentWindow->SetCompositor(this);
+    }
+  }
   return !!mFrontBuffer;
 }
 
 void
 EmbedLiteCompositorBridgeParent::WebRenderComposited()
 {
+  LOGT("WebRenderComposited");
   if (!PresentOffscreenSurface()) {
     return;
   }
@@ -216,7 +291,7 @@ bool
 EmbedLiteCompositorBridgeParent::WithPlatformImage(
   const PlatformImageCallback& callback)
 {
-  LOGT("EmbedLiteCompositorBridgeParent::WithPlatformImage");
+  LOGT("EmbedLiteCompositorBridgeParent::WithPlatformImage this=%p fb=%d", this, (int)!!mFrontBuffer);
   if (!callback) {
     return false;
   }
@@ -231,6 +306,7 @@ EmbedLiteCompositorBridgeParent::WithPlatformImage(
     generation = mPlatformImageGeneration;
   }
   if (!context || !frontBuffer) {
+    LOGT("EL-W1 no ctx/frontbuffer");
     return false;
   }
 
@@ -238,16 +314,19 @@ EmbedLiteCompositorBridgeParent::WithPlatformImage(
   {
     MutexAutoLock lock(mRenderMutex);
     if (generation != mPlatformImageGeneration) {
+      LOGT("EL-W2 generation race");
       return false;
     }
   }
 
   SharedSurface* sharedSurf = frontBuffer.get();
   if (sharedSurf->mDesc.type != SharedSurfaceType::EGLImageShare) {
+    LOGT("EL-W3 type=%d != EGLImageShare", int(sharedSurf->mDesc.type));
     return false;
   }
 
   if (!sharedSurf->IsBufferAvailable()) {
+    LOGT("EL-W4 buffer busy - retry");
     SchedulePlatformImageRetry();
     return false;
   }
@@ -292,6 +371,18 @@ EmbedLiteCompositorBridgeParent::ClearPlatformImage()
 }
 
 void
+EmbedLiteCompositorBridgeParent::FullInvalidateOnCompositorThread()
+{
+  // Frischer Screen ist leer; ein normaler Frame malt nur dirty tiles
+  // (= Punktemuster). Volles Invalidate erzwingt einen kompletten Render.
+  if (mWrBridge) {
+    // CONFIG_CHANGE erzwingt den vollen Szenen-/Frame-Neuaufbau - der
+    // richtige Hebel nach Renderer-Neubau (vgl. WRBP:1681).
+    mWrBridge->ScheduleForcedGenerateFrame(wr::RenderReasons::CONFIG_CHANGE);
+  }
+}
+
+void
 EmbedLiteCompositorBridgeParent::SuspendRendering()
 {
   LOGT("EmbedLiteCompositorBridgeParent::SuspendRendering");
@@ -320,18 +411,18 @@ EmbedLiteCompositorBridgeParent::ResumeRendering()
     width = mEGLSurfaceSize.width;
     height = mEGLSurfaceSize.height;
   }
+  LOGT("ResumeRendering size: %dx%d thread:%p", width, height, CompositorThread());
   if (width > 0 && height > 0 && CompositorThread()) {
+    bool resumeOk = false;
     MOZ_ALWAYS_SUCCEEDS(SyncRunnable::DispatchToThread(
       CompositorThread(),
-      NewRunnableMethod<int, int, int, int>(
+      NS_NewRunnableFunction(
         "EmbedLiteCompositorBridgeParent::ResumeCompositionAndResize",
-        this,
-        &EmbedLiteCompositorBridgeParent::ResumeCompositionAndResize,
-        x,
-        y,
-        width,
-        height)));
-    CompositorBridgeParent::ScheduleRenderOnCompositorThread(wr::RenderReasons::NONE);
+        [self = RefPtr<EmbedLiteCompositorBridgeParent>(this), &resumeOk, x, y, width, height]() {
+          resumeOk = self->ResumeCompositionAndResize(x, y, width, height);
+        })));
+    LOGT("ResumeCompositionAndResize=%d IsPaused=%d", (int)resumeOk, (int)IsPaused());
+    CompositorBridgeParent::ScheduleRenderOnCompositorThread(wr::RenderReasons::WIDGET);
   }
   ScheduleForcedRenderOnCompositorThread(wr::RenderReasons::WIDGET);
 }
@@ -359,6 +450,7 @@ EmbedLiteCompositorBridgeParent::ScheduleForcedRender(wr::RenderReasons aReasons
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   EnsureSurfaceSizeFromWindow();
+  LOGT("ScheduleForcedRender paused=%d", (int)IsPaused());
   if (WebRenderBridgeParent* wrBridge = GetWrBridge()) {
     wrBridge->ScheduleForcedGenerateFrame(aReasons);
     wrBridge->CompositeToTarget(VsyncId(), aReasons, nullptr, nullptr);
