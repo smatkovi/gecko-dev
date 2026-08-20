@@ -563,8 +563,9 @@ ln -s %{mozappdir}/libxul.so ${RPM_BUILD_ROOT}%{mozappdirdev}/sdk/lib/libxul.so
 
 %fdupes -s %{buildroot}%{_includedir}
 %fdupes -s %{buildroot}%{_libdir}
+for l in libnss3 libnssutil3 libsmime3 libssl3 libsoftokn3 libfreebl3 libfreeblpriv3; do cp %BUILD_DIR/dist/bin/$l.so ${RPM_BUILD_ROOT}%{mozappdir}/; done
 %{__chmod} +x %{buildroot}%{mozappdir}/*.so
-llvm-strip --strip-unneeded %{buildroot}%{mozappdir}/*.so %{buildroot}%{mozappdir}/xulrunner-qt5 %{buildroot}%{mozappdir}/plugin-container 2>/dev/null || true
+/srv/mer/toolings/SailfishOS-5.2.0.15/opt/cross/bin/aarch64-meego-linux-gnu-strip --strip-unneeded %{buildroot}%{mozappdir}/*.so && echo STRIP-OK
 # Use the system hunspell dictionaries
 %{__rm} -rf ${RPM_BUILD_ROOT}%{mozappdir}/dictionaries
 ln -s %{_datadir}/myspell ${RPM_BUILD_ROOT}%{mozappdir}/dictionaries
