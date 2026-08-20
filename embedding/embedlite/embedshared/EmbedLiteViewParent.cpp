@@ -284,8 +284,16 @@ mozilla::ipc::IPCResult EmbedLiteViewParent::RecvUpdateZoomConstraints(const uin
                                                                        const Maybe<ZoomConstraints> &aConstraints)
 {
   LOGT("manager: %p", GetApzcTreeManager());
-  // APZ-140 PENDING: TreeManager ist im WR-Embedding noch nicht verdrahtet;
-  // der Call crasht in halbinitialisierten APZ-Interna. Zoom kommt spaeter.
+  // APZ-140: TreeManager lebt inzwischen (Controller registriert, HandleTap
+  // bewiesen) - Constraints wie ContentReceivedInputBlock via Controller-Thread.
+  if (GetApzcTreeManager()) {
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod<ScrollableLayerGuid, Maybe<ZoomConstraints>>
+        ("IAPZCTreeManager::UpdateZoomConstraints",
+         GetApzcTreeManager(),
+         &IAPZCTreeManager::UpdateZoomConstraints,
+         ScrollableLayerGuid(GetWindowWidget() ? GetWindowWidget()->GetRootLayerId() : mozilla::layers::LayersId{0}, aPresShellId, aViewId),
+         aConstraints));
+  }
   return IPC_OK();
 }
 

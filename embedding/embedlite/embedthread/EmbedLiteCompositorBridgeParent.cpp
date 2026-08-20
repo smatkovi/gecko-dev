@@ -240,6 +240,7 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
       }
     }
   }
+  LOGT("EL-ROT pre-publish fbo=%u front=%p gen=%llu", context->GetDefaultFramebuffer(), mFrontBuffer.get(), (unsigned long long)mPlatformImageGeneration);
   if (screen->Size().IsEmpty() || !screen->PublishFrame(screen->Size())) {
     LOGT("EL-P2 publish failed this=%p", this);
     NS_ERROR("Failed to publish context frame");
