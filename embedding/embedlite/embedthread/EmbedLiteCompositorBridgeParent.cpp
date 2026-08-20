@@ -177,7 +177,20 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
     context = mGLContext;
     generation = mPlatformImageGeneration;
   }
-  if (context && !context->Screen()) {
+  // 140-Fix Rotation: Screen wurde nur EINMAL gebaut - nach dem Drehen las
+  // die App mit neuer Breite aus einem Portrait-Buffer (Stride-Riss).
+  bool screenStale = false;
+  if (context && context->Screen()) {
+    EnsureSurfaceSizeFromWindow();
+    gfx::IntSize cur;
+    { MutexAutoLock lock(mRenderMutex); cur = mEGLSurfaceSize; }
+    if (!cur.IsEmpty() && context->Screen()->Size() != cur) {
+      screenStale = true;
+      LOGT("EL-P4 screen stale %dx%d -> %dx%d", context->Screen()->Size().width,
+           context->Screen()->Size().height, cur.width, cur.height);
+    }
+  }
+  if (context && (!context->Screen() || screenStale)) {
     // Amtsnachfolger: RendererOGL hat den Kontext verdrahtet, aber der
     // 0072-Screen entsteht nur im Ensure-Pfad des Erstlings. Nachziehen.
     EnsureSurfaceSizeFromWindow();

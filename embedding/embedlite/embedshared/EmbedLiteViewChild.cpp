@@ -224,7 +224,12 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
   // Create a BrowsingContext for our windowless browser.
   RefPtr<BrowsingContext> browsingContext = BrowsingContext::CreateDetached(
       nullptr, parentBrowsingContext, nullptr, EmptyString(),
-      BrowsingContext::Type::Content, BrowsingContext::CreateDetachedOptions{});
+      BrowsingContext::Type::Content,
+      // 140-Fix: von window.open erzeugte Fenster duerfen sich per Skript
+      // schliessen (CloseOuter blockt sonst jedes navigierte Popup mit
+      // History > 1 - Google-OAuth gsi/transform blieb offen stehen).
+      BrowsingContext::CreateDetachedOptions{
+          .topLevelCreatedByWebContent = !!parentBrowsingContext});
   browsingContext->SetUsePrivateBrowsing(isPrivateWindow); // Needs to be called before attaching
   browsingContext->EnsureAttached();
   browsingContext->InitSessionHistory();
