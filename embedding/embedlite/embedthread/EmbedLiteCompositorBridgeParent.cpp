@@ -140,9 +140,13 @@ EmbedLiteCompositorBridgeParent::EnsureSurfaceSizeFromWindow()
   }
 
   MutexAutoLock lock(mRenderMutex);
-  if (!mEGLSurfaceSize.IsEmpty()) {
+  // 140-Fix Rotation: frueher Einmal-Gate - nach dem Drehen blieb die
+  // Surface im Portrait stehen (Stride-Riss). Jetzt nur noch abbrechen,
+  // wenn sich die Groesse wirklich nicht geaendert hat.
+  if (mEGLSurfaceSize.width == width && mEGLSurfaceSize.height == height) {
     return;
   }
+  LOGT("EL-SZ window size %dx%d -> %dx%d", mEGLSurfaceSize.width, mEGLSurfaceSize.height, width, height);
   mSurfaceOrigin.MoveTo(0, 0);
   SetEGLSurfaceRect(0, 0, width, height);
 }
