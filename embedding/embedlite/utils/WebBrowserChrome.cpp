@@ -217,6 +217,10 @@ NS_IMETHODIMP
 WebBrowserChrome::OnStateChange(nsIWebProgress* progress, nsIRequest* request,
                                 uint32_t progressStateFlags, nsresult status)
 {
+  if ((progressStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT) || NS_FAILED(status)) {
+    nsCString spec_el; if (nsCOMPtr<nsIChannel> ch_el = do_QueryInterface(request)) { nsCOMPtr<nsIURI> u_el; ch_el->GetURI(getter_AddRefs(u_el)); if (u_el) u_el->GetSpec(spec_el); }
+    LOGT("EL-STATE flags=0x%08x status=0x%08x url:%s", (uint32_t)progressStateFlags, (uint32_t)status, spec_el.get());
+  }
   NS_ENSURE_TRUE(mListener, NS_ERROR_FAILURE);
   nsCOMPtr<mozIDOMWindowProxy> docWin = do_GetInterface(mWebBrowser);
   nsCOMPtr<mozIDOMWindowProxy> progWin;

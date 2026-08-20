@@ -3,6 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include <unistd.h>
 #include "EmbedLog.h"
 
 #include "EmbedLiteCompositorBridgeParent.h"
@@ -108,6 +109,19 @@ EmbedLiteCompositorBridgeParent::SetWebRenderGLContext(GLContext* aGL)
     mFrontBuffer.reset();
     ++mPlatformImageGeneration;
     mGLContext = aGL;
+    // Amtswechsel: Der RendererOGL vergibt den GL-Kontext genau einmal pro
+    // Renderer-Generation - wer ihn frisch bekommt, ist der lebende
+    // Compositor. Der Vorgaenger haelt sonst mit eingefrorenem FrontBuffer
+    // (fb=1, about:blank) das Amt und die App zeigt ewig Weiss.
+    // (Gestriger Rueckbau war Fehlurteil auf Kulissen-Daten der
+    // geschlossenen Ladefront.)
+    if (aGL) {
+      if (EmbedLiteWindowParent* pw = EmbedLiteWindowParent::From(mWindowId)) {
+        if (pw->GetCompositor() != this) {
+          pw->SetCompositor(this);
+        }
+      }
+    }
   }
 }
 
@@ -196,6 +210,36 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
   GLScreenBuffer* screen = context->Screen();
   MOZ_ASSERT(screen);
 
+  // EL-DUMP: Renderziel-Inhalt VOR Publish als PPM sichern (max 3, env-gated).
+  if (getenv("EL_DUMP")) {
+    static int sDumpN = 0;
+    static int sPresentN = 0;
+    ++sPresentN;
+    static int sFrom = getenv("EL_DUMP_FROM") ? atoi(getenv("EL_DUMP_FROM")) : 0;
+    bool elDumpNow = access("/tmp/dumpnow", F_OK) == 0;
+    if (elDumpNow) unlink("/tmp/dumpnow");
+    if ((getenv("EL_DUMP_RING") || elDumpNow || (sDumpN < 10 && sPresentN >= sFrom && (sPresentN % 3) == 0)) && !screen->Size().IsEmpty() && context->MakeCurrent()) {
+      const int w = screen->Size().width, h = screen->Size().height;
+      UniquePtr<uint8_t[]> px(new (fallible) uint8_t[size_t(w) * h * 4]);
+      if (px) {
+        context->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, context->GetDefaultFramebuffer());
+        context->fReadPixels(0, 0, w, h, LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE, px.get());
+        char path[64];
+        if (getenv("EL_DUMP_RING")) {
+          snprintf(path, sizeof(path), "/tmp/elring_%d_%p.ppm", sPresentN % 8, this);
+        } else {
+          snprintf(path, sizeof(path), "/tmp/eldump_%d_%p.ppm", sDumpN, this);
+        }
+        if (FILE* f = fopen(path, "wb")) {
+          fprintf(f, "P6\n%d %d\n255\n", w, h);
+          for (size_t i = 0; i < size_t(w) * h; ++i) fwrite(px.get() + i * 4, 1, 3, f);
+          fclose(f);
+          LOGT("EL-DUMP wrote %s", path);
+        }
+        if (!getenv("EL_DUMP_RING")) ++sDumpN;
+      }
+    }
+  }
   if (screen->Size().IsEmpty() || !screen->PublishFrame(screen->Size())) {
     LOGT("EL-P2 publish failed this=%p", this);
     NS_ERROR("Failed to publish context frame");

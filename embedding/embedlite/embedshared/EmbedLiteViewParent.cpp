@@ -121,8 +121,15 @@ mozilla::layers::IAPZCTreeManager *EmbedLiteViewParent::GetApzcTreeManager()
 {
   nsWindow *window = GetWindowWidget();
 
-  if (!mApzcTreeManager && mCompositor && window) {
-    mApzcTreeManager = window->GetAPZCTreeManager();
+  // 140-Fix: Cache nie einfrieren - nach Compositor-Rebuild hielt er den
+  // TreeManager der toten Session (Split-Brain: 159 Events an Manager #1,
+  // Controller via reattach an Session #2 -> HandleTap ewig stumm).
+  if (window) {
+    RefPtr<mozilla::layers::IAPZCTreeManager> fresh = window->GetAPZCTreeManager();
+    if (fresh && fresh.get() != mApzcTreeManager.get()) {
+      LOGT("EL-APZ parent refresh %p -> %p", mApzcTreeManager.get(), fresh.get());
+      mApzcTreeManager = fresh.forget();
+    }
   }
   return mApzcTreeManager.get();
 }
@@ -644,6 +651,10 @@ EmbedLiteViewParent::SetEmbedAPIView(EmbedLiteView *aView)
 {
   LOGT();
   mView = aView;
+  // 140-Fix: Ctor-SetCompositor lief vor SetView ins mView-Gate von
+  // UpdateScrollController - Controller-Registrierung (Activate ->
+  // SetContentController -> APZ) hier nachholen, sonst bleibt HandleTap stumm.
+  UpdateScrollController();
   return NS_OK;
 }
 

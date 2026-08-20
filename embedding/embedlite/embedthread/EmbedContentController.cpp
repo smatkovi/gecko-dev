@@ -57,6 +57,8 @@ void EmbedContentController::HandleTap(TapType aType, const LayoutDevicePoint &a
                                        uint64_t aInputBlockId,
                                        const Maybe<DoubleTapToZoomMetrics> &aDoubleTapToZoomMetrics)
 {
+  float px = aPoint.x, py = aPoint.y;
+  LOGT("EL-TAP type=%d p=%.0f,%.0f block=%llu", (int)aType, px, py, (unsigned long long)aInputBlockId);
   switch (aType) {
     case GeckoContentController::TapType::eSingleTap:
       HandleSingleTap(aPoint, aModifiers, aGuid, aInputBlockId);

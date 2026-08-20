@@ -489,7 +489,8 @@ mozilla::ipc::IPCResult EmbedLiteViewChild::RecvLoadURL(const nsString &url, con
   LoadURIOptions loadURIOptions;
   loadURIOptions.mTriggeringPrincipal = nsContentUtils::GetSystemPrincipal();
   loadURIOptions.mLoadFlags = flags;
-  mWebNavigation->FixupAndLoadURIString(url, loadURIOptions);
+  nsresult loadRv = mWebNavigation->FixupAndLoadURIString(url, loadURIOptions);
+  LOGT("EL-LOAD FixupAndLoadURIString rv=0x%08x url:%s", (uint32_t)loadRv, NS_ConvertUTF16toUTF8(url).get());
 
   return IPC_OK();
 }

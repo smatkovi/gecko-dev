@@ -157,7 +157,21 @@ void
 nsWindow::CreateCompositor(int aWidth, int aHeight)
 {
   LOGT();
+  // Strukturfix: EIN Compositor pro Fenster. Der Boot-Zweitruf (nach
+  // ConfigureAPZ) baute bisher einen zweiten CBP - Wurzel der gesamten
+  // Amtswechsel-Saga (verdraengter Publizierer, eingefrorenes Erstbild).
+  if (mCompositorSession) {
+    LOGT("EL-CC compositor session exists - skip rebuild");
+    return;
+  }
   nsBaseWidget::CreateCompositor(aWidth, aHeight);
+  // 140-Fix: Eine frische CompositorSession kennt keinen ContentController.
+  // Der Stack existiert genau fuer Restaurierung - beim Session-Neuaufbau
+  // (Seitenwechsel) aber fragte ihn niemand ab: HandleTap blieb stumm.
+  if (mCompositorSession && !mControllers.empty()) {
+    LOGT("EL-APZ reattach controller %u to new session", mControllers.back()->GetUniqueID());
+    mCompositorSession->SetContentController(mControllers.back());
+  }
 }
 
 void *
