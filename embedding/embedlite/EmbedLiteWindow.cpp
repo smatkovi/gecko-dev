@@ -42,6 +42,7 @@ void EmbedLiteWindow::Destroyed()
 
 void EmbedLiteWindow::SetSize(int width, int height)
 {
+  mWindowParent->SetSize(width, height);
   Unused << mWindowParent->SendSetSize(gfxSize(width, height));
 }
 

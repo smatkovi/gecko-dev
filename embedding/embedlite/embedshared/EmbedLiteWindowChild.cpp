@@ -10,6 +10,8 @@
 #include "nsWindow.h"
 #include "EmbedLiteAppChild.h"
 #include "EmbedLiteWindowChild.h"
+#include "EmbedLiteWindowParent.h"
+#include "EmbedLiteCompositorBridgeParent.h"
 #include "mozilla/Unused.h"
 #include "Hal.h"
 #include "gfxPlatform.h"
@@ -72,7 +74,7 @@ EmbedLiteWindowChild::EmbedLiteWindowChild(const uint16_t &width, const uint16_t
   , mListener(aListener)
   , mWidget(nullptr)
   , mBounds(0, 0, width, height)
-  , mRotation(ROTATION_0)
+  , mRotation(mozilla::ROTATION_0)
   , mInitialized(false)
   , mDestroyAfterInit(false)
   , mDepth(32)
@@ -163,6 +165,19 @@ mozilla::ipc::IPCResult EmbedLiteWindowChild::RecvSetContentOrientation(const ui
     nsWindow *widget = GetWidget();
     widget->SetRotation(mRotation);
     widget->UpdateBounds(true);
+
+    // 140-Fix Rotation: WidgetRotationChanged hat keinen Hoerer - der
+    // Compositor erfuhr nie von der Drehung und rendert weiter in die
+    // Portrait-Surface (verzerrtes, halbes Bild). Neue Bounds direkt melden;
+    // EnsureSurfaceSizeFromWindow baut den Screen dann neu auf.
+    LayoutDeviceIntRect b = widget->GetBounds();
+    if (EmbedLiteWindowParent* wp = EmbedLiteWindowParent::From(mId)) {
+      if (EmbedLiteCompositorBridgeParent* cbp = wp->GetCompositor()) {
+        LOGT("EL-ROTW rotation=%d bounds %dx%d", (int)mRotation, b.width, b.height);
+        wp->SetSize(b.width, b.height);
+        cbp->SetSurfaceRect(0, 0, b.width, b.height);
+      }
+    }
   }
 
   int32_t colorDepth, pixelDepth;

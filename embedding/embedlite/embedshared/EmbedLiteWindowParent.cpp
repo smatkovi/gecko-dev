@@ -68,6 +68,22 @@ uint32_t EmbedLiteWindowParent::Current()
   return sCurrentWindowId;
 }
 
+void EmbedLiteWindowParent::SetSize(int width, int height)
+{
+  // 140-Fix Rotation: mSize war ein Ctor-Fossil - die Offscreen-Surface
+  // blieb im Portrait, die App texturierte quer daraus (Verzerrung, halbes
+  // Bild). Groesse nachfuehren, damit EnsureSurfaceSizeFromWindow im
+  // Render-Pfad den Screen neu baut.
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  mSize = gfxSize(width, height);
+  LOGT("EL-WSZ window size now %dx%d compositor=%p", width, height, mCompositor.get());
+  if (mCompositor) {
+    mCompositor->ScheduleForcedRenderOnCompositorThread(wr::RenderReasons::WIDGET);
+  }
+}
+
 void EmbedLiteWindowParent::AddObserver(EmbedLiteWindowParentObserver* obs)
 {
   mObservers.AppendElement(obs);
