@@ -637,7 +637,7 @@ void WebBrowserChrome::SetEventHandler()
                           nsIWebProgress::NOTIFY_STATE_DOCUMENT |
                           nsIWebProgress::NOTIFY_PROGRESS);
 
-  nsCOMPtr<nsPIDOMWindowOuter> pidomWindow = do_QueryInterface(mWebBrowser);
+  nsCOMPtr<nsPIDOMWindowOuter> pidomWindow = do_GetInterface(mWebBrowser);  // 140-Fix: nsWebBrowser liefert das Window nur via nsIInterfaceRequestor - QI gab null, alle Chrome-Events (DOMWindowClose, Titel, pagehide) blieben unregistriert
   NS_ENSURE_TRUE(pidomWindow, );
   RefPtr<EventTarget> target(pidomWindow->GetChromeEventHandler());
   NS_ENSURE_TRUE(target, );
@@ -646,6 +646,7 @@ void WebBrowserChrome::SetEventHandler()
   target->AddEventListener(nsLiteralString(MOZ_pagehide), this, PR_FALSE);
   target->AddEventListener(nsLiteralString(MOZ_DOMTitleChanged), this, PR_FALSE);
   target->AddEventListener(nsLiteralString(MOZ_DOMWindowClose), this, PR_FALSE);
+  LOGT("EL-EVH chrome event listeners attached");
 }
 
 void WebBrowserChrome::RemoveEventHandler()
@@ -657,7 +658,7 @@ void WebBrowserChrome::RemoveEventHandler()
 
   mListener = nullptr;
   mHandlerAdded = false;
-  nsCOMPtr<nsPIDOMWindowOuter> pidomWindow = do_QueryInterface(mWebBrowser);
+  nsCOMPtr<nsPIDOMWindowOuter> pidomWindow = do_GetInterface(mWebBrowser);  // 140-Fix: nsWebBrowser liefert das Window nur via nsIInterfaceRequestor - QI gab null, alle Chrome-Events (DOMWindowClose, Titel, pagehide) blieben unregistriert
   NS_ENSURE_TRUE(pidomWindow, );
   RefPtr<EventTarget> target(pidomWindow->GetChromeEventHandler());
   NS_ENSURE_TRUE(target, );
