@@ -160,6 +160,15 @@ bool
 EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
 {
   LOGT("EmbedLiteCompositorBridgeParent::PresentOffscreenSurface this=%p", this);
+  // Publish-Amtssperre: Zwei CBPs publizieren sonst konkurrierend in
+  // dieselbe Kette (Ring-Beweis: Erstling-Weiss/Schwarz ueberschreibt die
+  // Seite des Amtsinhabers -> Touch-Degradation, Blinken, Standbild).
+  if (EmbedLiteWindowParent* pw = EmbedLiteWindowParent::From(mWindowId)) {
+    if (pw->GetCompositor() && pw->GetCompositor() != this) {
+      LOGT("EL-VETO publish skipped (not incumbent) this=%p", this);
+      return true;
+    }
+  }
   MOZ_ASSERT(wr::RenderThread::IsInRenderThread());
   RefPtr<GLContext> context;
   uint64_t generation;
