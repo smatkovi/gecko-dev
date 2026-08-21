@@ -300,6 +300,7 @@ echo "export CARGO_HOME=%BUILD_DIR/cargo" >> "%BUILD_DIR"/rpm-shared.env
 # would produce x86 so this is how it knows differently. Not needed
 # for native x86 builds
 echo "export PATH=/home/mersdk/rust190root/bin:/home/mersdk/cbindgen29/bin:/home/mersdk/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "%BUILD_DIR"/rpm-shared.env
+echo "export TMPDIR=/home/mersdk/tmp" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUSTC=/home/mersdk/rust190root/bin/rustc" >> "%BUILD_DIR"/rpm-shared.env
 echo "export CARGO=/home/mersdk/rust190root/bin/cargo" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUSTUP=/bin/false" >> "%BUILD_DIR"/rpm-shared.env
