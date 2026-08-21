@@ -23,6 +23,8 @@ class GeckoCameraDecoderModule : public PlatformDecoderModule {
  public:
   static already_AddRefed<PlatformDecoderModule> Create();
 
+  const char* Name() const override { return "GeckoCamera"; }
+
   nsresult Startup() override;
 
   already_AddRefed<MediaDataDecoder> CreateVideoDecoder(
@@ -34,6 +36,12 @@ class GeckoCameraDecoderModule : public PlatformDecoderModule {
   media::DecodeSupportSet SupportsMimeType(
       const nsACString& aMimeType,
       DecoderDoctorDiagnostics* aDiagnostics) const override;
+
+  media::DecodeSupportSet Supports(
+      const SupportDecoderParams& aParams,
+      DecoderDoctorDiagnostics* aDiagnostics) const override {
+    return SupportsMimeType(aParams.MimeType(), aDiagnostics);
+  }
 
   static void Init();
 
