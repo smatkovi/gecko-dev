@@ -253,7 +253,7 @@ Tests and misc files for xulrunner.
 %define BASE_CONFIG "$PWD"/../embedding/embedlite/config/mozconfig.%{embedlite_config}
 
 %prep
-%autosetup -p1 -n %{name}-%{version}/gecko-dev
+%autosetup -N -n %{name}-%{version}/gecko-dev
 
 %ifarch %arm32
 %define SB2_TARGET armv7-unknown-linux-gnueabihf
