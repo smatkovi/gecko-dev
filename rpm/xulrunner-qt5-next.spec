@@ -299,10 +299,10 @@ echo "export CARGO_HOME=%BUILD_DIR/cargo" >> "%BUILD_DIR"/rpm-shared.env
 # to "whatever rust was built as" but in SB2 rust is accelerated and
 # would produce x86 so this is how it knows differently. Not needed
 # for native x86 builds
-echo "export PATH=/home/mersdk/.rustup/toolchains/1.82.0-i686-unknown-linux-gnu/bin:/home/mersdk/.cargo/bin:\/home/mersdk/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "%BUILD_DIR"/rpm-shared.env
-echo "export RUSTC=/home/mersdk/.rustup/toolchains/1.82.0-i686-unknown-linux-gnu/bin/rustc" >> "%BUILD_DIR"/rpm-shared.env
-echo "export CARGO=/home/mersdk/.rustup/toolchains/1.82.0-i686-unknown-linux-gnu/bin/cargo" >> "%BUILD_DIR"/rpm-shared.env
-echo "export CBINDGEN=/home/mersdk/.cargo/bin/cbindgen" >> "%BUILD_DIR"/rpm-shared.env
+echo "export PATH=/home/mersdk/rust190root/bin:/home/mersdk/cbindgen29/bin:/home/mersdk/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "%BUILD_DIR"/rpm-shared.env
+echo "export RUSTC=/home/mersdk/rust190root/bin/rustc" >> "%BUILD_DIR"/rpm-shared.env
+echo "export CARGO=/home/mersdk/rust190root/bin/cargo" >> "%BUILD_DIR"/rpm-shared.env
+echo "export CBINDGEN=/home/mersdk/cbindgen29/bin/cbindgen" >> "%BUILD_DIR"/rpm-shared.env
 echo "export SB2_RUST_TARGET_TRIPLE=%SB2_TARGET" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUST_HOST_TARGET=%SB2_TARGET" >> "%BUILD_DIR"/rpm-shared.env
 
