@@ -15,6 +15,8 @@
 #include <qthread.h>
 
 #include "prenv.h"
+#include "prthread.h"
+#include "mozilla/gfx/Logging.h"
 #include "nsQAppInstance.h"
 #include "nsScreenManagerQt.h"
 #include "mozilla/UniquePtr.h"
@@ -78,8 +80,17 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
         flags |= QEventLoop::WaitForMoreEvents;
 
     QAbstractEventDispatcher *dispatcher =  QAbstractEventDispatcher::instance(QThread::currentThread());
-    if (!dispatcher)
+    if (!dispatcher) {
+        // EL-AS: Kein Qt-Dispatcher auf diesem Thread (EmbedLiteSubThread ist
+        // base::Thread, kein QThread) -> ProcessNextNativeEvent kann nie
+        // blocken, nsBaseAppShell::Run degeneriert zur 100%-CPU-Schleife.
+        static bool sLogged = false;
+        if (!sLogged) { sLogged = true; gfxCriticalNote << "EL-AS no dispatcher on thread, sleep-fallback active"; }
+        if (mayWait) {
+            PR_Sleep(PR_MillisecondsToInterval(4));
+        }
         return false;
+    }
 
     return dispatcher->processEvents(flags) ? true : false;
 }
