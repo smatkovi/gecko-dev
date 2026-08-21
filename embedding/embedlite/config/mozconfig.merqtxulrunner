@@ -50,3 +50,6 @@ ac_add_options --disable-accessibility
 ac_add_options --disable-system-extension-dirs
 
 ac_add_options --without-wasm-sandboxed-libraries
+
+mk_add_options "export TMPDIR=/home/mersdk/tmp"
+export TMPDIR=/home/mersdk/tmp
