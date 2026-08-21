@@ -302,6 +302,7 @@ echo "export CARGO_HOME=%BUILD_DIR/cargo" >> "%BUILD_DIR"/rpm-shared.env
 echo "export PATH=/home/mersdk/rust190root/bin:/home/mersdk/cbindgen29/bin:/home/mersdk/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUSTC=/home/mersdk/rust190root/bin/rustc" >> "%BUILD_DIR"/rpm-shared.env
 echo "export CARGO=/home/mersdk/rust190root/bin/cargo" >> "%BUILD_DIR"/rpm-shared.env
+echo "export RUSTUP=/bin/false" >> "%BUILD_DIR"/rpm-shared.env
 echo "export CBINDGEN=/home/mersdk/cbindgen29/bin/cbindgen" >> "%BUILD_DIR"/rpm-shared.env
 echo "export SB2_RUST_TARGET_TRIPLE=%SB2_TARGET" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUST_HOST_TARGET=%SB2_TARGET" >> "%BUILD_DIR"/rpm-shared.env
