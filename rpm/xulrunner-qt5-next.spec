@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    1
+Release:    2
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -610,3 +610,12 @@ touch /var/lib/_MOZEMBED_CACHE_CLEAN_
 %exclude %{mozappdir}/dictionaries
 %exclude %{mozappdir}/plugin-container
 %exclude %{mozappdir}/platform.ini
+
+%changelog
+* Fri Aug 21 2026 Sebastian Matkovich <smatkovi> - 140.12.0-2
+- Fix constant 100% CPU spinning of an idle core (AppShell could
+  never block on non-Qt threads; DummyEvent ping-pong)
+- Landscape orientation fixed (rotation now reaches the compositor)
+- Popups may close themselves (Google OAuth completes cleanly)
+- force-picture-invalidation shipped as default pref
+

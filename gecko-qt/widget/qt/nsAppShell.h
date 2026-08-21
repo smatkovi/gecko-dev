@@ -29,6 +29,7 @@ public:
 protected:
   virtual void ScheduleNativeEventCallback();
   virtual bool ProcessNextNativeEvent(bool mayWait);
+  virtual bool CanBlockNativeEvents() override;
   virtual ~nsAppShell();
 
 private:

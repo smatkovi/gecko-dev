@@ -72,6 +72,15 @@ nsAppShell::ScheduleNativeEventCallback()
 
 
 bool
+nsAppShell::CanBlockNativeEvents()
+{
+    // Laufzeitpruefung statt Init-Snapshot: entscheidend ist der Thread,
+    // auf dem die AppShell-Schleife tatsaechlich laeuft (EmbedLiteSubThread
+    // ist base::Thread ohne Qt-Dispatcher).
+    return QAbstractEventDispatcher::instance(QThread::currentThread()) != nullptr;
+}
+
+bool
 nsAppShell::ProcessNextNativeEvent(bool mayWait)
 {
     QEventLoop::ProcessEventsFlags flags = QEventLoop::AllEvents;
