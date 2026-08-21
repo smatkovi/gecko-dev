@@ -300,6 +300,8 @@ echo "export CARGO_HOME=%BUILD_DIR/cargo" >> "%BUILD_DIR"/rpm-shared.env
 # would produce x86 so this is how it knows differently. Not needed
 # for native x86 builds
 echo "export PATH=/home/mersdk/rust190root/bin:/home/mersdk/cbindgen29/bin:/home/mersdk/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "%BUILD_DIR"/rpm-shared.env
+echo "export BINDGEN_EXTRA_CLANG_ARGS=\"-x c++ -std=gnu++20 -fno-sized-deallocation -fno-aligned-new -DTRACING=1 -DIMPL_LIBXUL -DMOZILLA_INTERNAL_API -DRUST_BINDGEN -I%BUILD_DIR/dist/include -I%BUILD_DIR/dist/include/nspr\"" >> "%BUILD_DIR"/rpm-shared.env
+echo "export LIBCLANG_PATH=/usr/lib64" >> "%BUILD_DIR"/rpm-shared.env
 echo "export TMPDIR=/home/mersdk/tmp" >> "%BUILD_DIR"/rpm-shared.env
 echo "export RUSTC=/home/mersdk/rust190root/bin/rustc" >> "%BUILD_DIR"/rpm-shared.env
 echo "export CARGO=/home/mersdk/rust190root/bin/cargo" >> "%BUILD_DIR"/rpm-shared.env
