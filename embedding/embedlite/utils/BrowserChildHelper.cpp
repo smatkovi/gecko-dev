@@ -186,11 +186,11 @@ void BrowserChildHelper::DispatchMessageManagerMessage(const nsAString& aMessage
                                                        const nsAString& aJSONData) {
   AutoSafeJSContext cx;
   JS::Rooted<JS::Value> json(cx, JS::NullValue());
-  dom::ipc::StructuredCloneData data;
+  RefPtr<dom::ipc::StructuredCloneData> data = new dom::ipc::StructuredCloneData();
   if (JS_ParseJSON(cx, static_cast<const char16_t*>(aJSONData.BeginReading()),
                    aJSONData.Length(), &json)) {
     ErrorResult rv;
-    data.Write(cx, json, rv);
+    data->Write(cx, json, rv);
     if (NS_WARN_IF(rv.Failed())) {
       rv.SuppressException();
       return;
@@ -201,7 +201,7 @@ void BrowserChildHelper::DispatchMessageManagerMessage(const nsAString& aMessage
       mBrowserChildMessageManager);
   RefPtr<nsFrameMessageManager> mm = kungFuDeathGrip->GetMessageManager();
   mm->ReceiveMessage(static_cast<EventTarget*>(kungFuDeathGrip), nullptr,
-                     aMessageName, false, &data, nullptr, IgnoreErrors());
+                     aMessageName, false, mozilla::WrapNotNull(data.get()), nullptr);
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(BrowserChildHelper)
@@ -376,8 +376,8 @@ BrowserChildHelper::DoLoadMessageManagerScript(const nsAString& aURL, bool aRunI
 
 bool
 BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
-                                          mozilla::dom::ipc::StructuredCloneData& aData,
-                                          nsTArray<mozilla::dom::ipc::StructuredCloneData> *aRetVal)
+                                          mozilla::NotNull<mozilla::dom::ipc::StructuredCloneData*> aData,
+                                          nsTArray<mozilla::NotNull<RefPtr<mozilla::dom::ipc::StructuredCloneData>>>* aRetVal)
 {
   if (!mView) {
     return false;
@@ -407,8 +407,8 @@ BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
     embedFrame->mWindow = window->GetBrowsingContext();
   }
 
-  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, &aData, aRetVal, IgnoreErrors());
-  mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, &aData, aRetVal, IgnoreErrors());
+  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, aData, aRetVal);
+  mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, aData, aRetVal);
 
   if (!mView->HasMessageListener(aMessage)) {
     LOGE("Message not registered msg:%s\n", NS_ConvertUTF16toUTF8(aMessage).get());
@@ -418,16 +418,15 @@ BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
   // FIXME: Need callback interface for simple JSON to avoid useless conversion here
   JS::RootedValue rval(mozilla::dom::RootingCx());
   JSContext *context = nsContentUtils::GetCurrentJSContext();
-  JS::StructuredCloneScope scope = JS::StructuredCloneScope::SameProcess;
 
-  if (aData.DataLength() > 0 && !JS_ReadStructuredClone(context, aData.Data(),
-                                                        JS_STRUCTURED_CLONE_VERSION,
-                                                        scope,
-                                                        &rval,
-                                                        JS::CloneDataPolicy(),
-                                                        nullptr, nullptr)) {
-    JS_ClearPendingException(context);
-    return false;
+  if (aData->HasData()) {
+    ErrorResult readRv;
+    aData->Read(context, &rval, readRv);
+    if (readRv.Failed()) {
+      readRv.SuppressException();
+      JS_ClearPendingException(context);
+      return false;
+    }
   }
 
   nsAutoString json;
@@ -440,12 +439,13 @@ BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
   bool retValue = mView->DoSendSyncMessage(nsString(aMessage).get(), json.get(), &jsonRetVal);
   if (retValue && aRetVal) {
     for (uint32_t i = 0; i < jsonRetVal.Length(); i++) {
-      mozilla::dom::ipc::StructuredCloneData* cloneData = aRetVal->AppendElement();
+      RefPtr<mozilla::dom::ipc::StructuredCloneData> cloneData = new mozilla::dom::ipc::StructuredCloneData();
 
       NS_ConvertUTF16toUTF8 data(jsonRetVal[i]);
       if (!cloneData->CopyExternalData(data.get(), data.Length())) {
         return false;
       }
+      aRetVal->AppendElement(mozilla::WrapNotNull(cloneData));
     }
   }
 
@@ -453,7 +453,7 @@ BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
 }
 
 nsresult BrowserChildHelper::DoSendAsyncMessage(const nsAString& aMessage,
-                                                mozilla::dom::ipc::StructuredCloneData& aData)
+                                       mozilla::NotNull<mozilla::dom::ipc::StructuredCloneData*> aData)
 {
   if (!mView) {
     return NS_ERROR_FAILURE;
@@ -484,10 +484,10 @@ nsresult BrowserChildHelper::DoSendAsyncMessage(const nsAString& aMessage,
     embedFrame->mWindow = window->GetBrowsingContext();
   }
 
-  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, false, &aData, nullptr, IgnoreErrors());
+  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, false, aData, nullptr);
 
   mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame),
-                     nullptr, aMessage, false, &aData, nullptr, IgnoreErrors());
+                     nullptr, aMessage, false, aData, nullptr);
 
   if (!mView->HasMessageListener(aMessage)) {
     LOGW("Message not registered msg:%s\n", NS_ConvertUTF16toUTF8(aMessage).get());
@@ -495,18 +495,17 @@ nsresult BrowserChildHelper::DoSendAsyncMessage(const nsAString& aMessage,
   }
 
   JS::RootedValue rval(mozilla::dom::RootingCx());
-  JS::StructuredCloneScope scope = JS::StructuredCloneScope::SameProcess;
   JSContext *context = nsContentUtils::GetCurrentJSContext();
 
 
-  if (aData.DataLength() > 0 && !JS_ReadStructuredClone(context, aData.Data(),
-                                                        JS_STRUCTURED_CLONE_VERSION,
-                                                        scope,
-                                                        &rval,
-                                                        JS::CloneDataPolicy(),
-                                                        nullptr, nullptr)) {
-    JS_ClearPendingException(context);
-    return NS_ERROR_UNEXPECTED;
+  if (aData->HasData()) {
+    ErrorResult readRv;
+    aData->Read(context, &rval, readRv);
+    if (readRv.Failed()) {
+      readRv.SuppressException();
+      JS_ClearPendingException(context);
+      return NS_ERROR_UNEXPECTED;
+    }
   }
 
   nsAutoString json;

@@ -18,6 +18,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/ContentFrameMessageManager.h"
 #include "mozilla/dom/MessageManagerCallback.h"
+#include "mozilla/NotNull.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/PresShell.h"
 
@@ -98,10 +99,10 @@ public:
    */
   bool DoLoadMessageManagerScript(const nsAString& aURL, bool aRunInGlobalScope) override;
   bool DoSendBlockingMessage(const nsAString& aMessage,
-                             mozilla::dom::ipc::StructuredCloneData& aData,
-                             nsTArray<mozilla::dom::ipc::StructuredCloneData>* aRetVal) override;
+                             mozilla::NotNull<mozilla::dom::ipc::StructuredCloneData*> aData,
+                             nsTArray<mozilla::NotNull<RefPtr<mozilla::dom::ipc::StructuredCloneData>>>* aRetVal) override;
   nsresult DoSendAsyncMessage(const nsAString& aMessage,
-                              mozilla::dom::ipc::StructuredCloneData& aData) override;
+                              mozilla::NotNull<mozilla::dom::ipc::StructuredCloneData*> aData) override;
 
   bool DoUpdateZoomConstraints(const uint32_t& aPresShellId,
                                const mozilla::layers::ScrollableLayerGuid::ViewID &aViewId,

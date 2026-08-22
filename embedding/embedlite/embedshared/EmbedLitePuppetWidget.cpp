@@ -283,11 +283,11 @@ EmbedLitePuppetWidget::RemoveIMEComposition()
   textEvent.mTimeStamp = TimeStamp::Now();
   textEvent.mData = mIMEComposingText;
   nsEventStatus status;
-  DispatchEvent(&textEvent, status);
+  status = DispatchEvent(&textEvent);
 
   WidgetCompositionEvent event(true, eCompositionEnd, this);
   event.mTimeStamp = TimeStamp::Now();
-  DispatchEvent(&event, status);
+  status = DispatchEvent(&event);
 }
 
 EmbedLitePuppetWidget *
