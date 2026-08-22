@@ -1,6 +1,5 @@
 %define greversion    153.2.0
-# Keep milestone.txt (configured MOZILLA_VERSION) at 140.12.0: changing it reconfigures and rebuilds the whole tree.
-%define milestone     140.12.0
+%define milestone     %{greversion}
 
 %define embedlite_config merqtxulrunner
 
