@@ -222,10 +222,6 @@ NS_IMETHODIMP EmbedLiteXulAppInfo::GetFissionDecisionStatusString(nsACString& aF
 }
 
 /* readonly attribute boolean sessionHistoryInParent; */
-NS_IMETHODIMP EmbedLiteXulAppInfo::GetSessionHistoryInParent(bool *aSessionHistoryInParent)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
 
 /* readonly attribute AString processStartupShortcut; */
 NS_IMETHODIMP EmbedLiteXulAppInfo::GetProcessStartupShortcut(nsAString& aProcessStartupShortcut)

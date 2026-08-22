@@ -25,7 +25,7 @@ static nsTArray<PuppetWidgetBase*> gTopLevelWindows;
 NS_IMPL_ISUPPORTS_INHERITED0(PuppetWidgetBase, nsIWidget)
 
 PuppetWidgetBase::PuppetWidgetBase()
-  : nsBaseWidget()
+  : nsIWidget()
   , mVisible(false)
   , mEnabled(false)
   , mActive(false)

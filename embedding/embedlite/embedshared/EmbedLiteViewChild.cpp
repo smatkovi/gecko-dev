@@ -1298,7 +1298,7 @@ static CodeNameIndex getCodeNameIndexByCharCode(int charCode)
 #define KEY(key_, _codeNameIdx, _keyCode, _modifier) \
   case key_[0]: return CODE_NAME_INDEX_##_codeNameIdx;
 #define CONTROL(keyNameIdx_, _codeNameIdx, _keyCode)
-#include "KeyCodeConsensus_En_US.h"
+#include "KeyCodeConsensus_En_US.inc"
     default: return CODE_NAME_INDEX_UNKNOWN;
 #undef CONTROL
 #undef KEY
@@ -1311,7 +1311,7 @@ static Modifiers getModifiersByCharCode(int charCode)
 #define KEY(key_, _codeNameIdx, _keyCode, _modifier) \
   case key_[0]: return _modifier;
 #define CONTROL(keyNameIdx_, _codeNameIdx, _keyCode)
-#include "KeyCodeConsensus_En_US.h"
+#include "KeyCodeConsensus_En_US.inc"
     default: return 0;
 #undef CONTROL
 #undef KEY

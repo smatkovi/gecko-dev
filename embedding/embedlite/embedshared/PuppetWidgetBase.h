@@ -98,9 +98,8 @@ protected:
   bool mEnabled;
   bool mActive;
 
-  // Formerly nsIWidget members (upstream Bug 1994157 merged it into nsIWidget).
+  // Formerly an nsBaseWidget member (upstream Bug 1994157 merged nsBaseWidget into nsIWidget).
   LayoutDeviceIntRect mBounds;
-  nsSizeMode mSizeMode = nsSizeMode_Normal;
 
   ChildrenArray mChildren;
   ObserverArray mObservers;
