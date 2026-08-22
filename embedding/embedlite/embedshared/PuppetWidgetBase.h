@@ -77,6 +77,7 @@ public:
   void SetActive(bool active);
 
   virtual WindowRenderer* GetWindowRenderer() override;
+  virtual double GetDefaultScaleInternal() override;
 
   static void DumpWidgetTree();
   static void DumpWidgetTree(const nsTArray<PuppetWidgetBase *> &widgets, int indent = 0);

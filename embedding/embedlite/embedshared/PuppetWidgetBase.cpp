@@ -246,6 +246,23 @@ PuppetWidgetBase::Invalidate(const LayoutDeviceIntRect &aRect)
   // painting is driven by the compositor.
 }
 
+double
+PuppetWidgetBase::GetDefaultScaleInternal()
+{
+  // Child (view) widgets take the device scale from their top-level nsWindow,
+  // which knows the screen density; the upstream nsIWidget default is 1.0.
+  // Walk the parent chain explicitly: the view widget is created as a
+  // top-level window type, so GetTopLevelWidget() would stop at this.
+  nsIWidget* root = this;
+  while (root->GetParent()) {
+    root = root->GetParent();
+  }
+  if (root != this) {
+    return root->GetDefaultScale().scale;
+  }
+  return nsIWidget::GetDefaultScaleInternal();
+}
+
 void
 PuppetWidgetBase::CaptureRollupEvents(bool aDoCapture)
 {
