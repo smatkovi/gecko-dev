@@ -369,6 +369,9 @@ done
 %endif
 
 [ -f "%BUILD_DIR"/rpm-shared.env ] && source "%BUILD_DIR"/rpm-shared.env || true
+# Local in-place rebuilds skip the prep stage, so set these here as well.
+export MOZ_BUILD_DATE=20260822000000
+export CCACHE=/srv/mer/toolings/SailfishOS-5.2.0.15/usr/bin/ccache
 
 %ifarch %ix86
 # Clang cannot infer Sailfish's GCC installation from Gecko's generic i686
