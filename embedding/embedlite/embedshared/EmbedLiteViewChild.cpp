@@ -26,6 +26,8 @@
 #include "nsFocusManager.h"
 #include "nsIWebBrowserChrome.h"
 #include "nsWebBrowser.h"
+#include "nsOpenWindowInfo.h"
+#include "mozilla/NullPrincipal.h"
 #include "nsRefreshDriver.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsPIDOMWindow.h"
@@ -253,7 +255,13 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
   // and finally creates nsIBaseWindow. When browsingContext is passed to
   // nsWebBrowser::Create, typeContentWrapper type is passed to the nsWebBrowser
   // upon instantiation.
-  Unused << nsWebBrowser::Create(mChrome, mWidget, browsingContext, nullptr, nullptr,
+  // nsWebBrowser::Create needs an nsIOpenWindowInfo for the initial
+  // about:blank principal (template: nsAppShellService::CreateWindowlessBrowser).
+  RefPtr<nsOpenWindowInfo> openWindowInfo = new nsOpenWindowInfo();
+  openWindowInfo->mPrincipalToInheritForAboutBlank =
+      mozilla::NullPrincipal::CreateWithoutOriginAttributes();
+  Unused << nsWebBrowser::Create(mChrome, mWidget, browsingContext,
+                                 nullptr /* initialWindowChild */, openWindowInfo,
                                  getter_AddRefs(mWebBrowser));
   mWebBrowser->SetAllowDNSPrefetch(true);
 
