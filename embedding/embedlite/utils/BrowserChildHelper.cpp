@@ -485,38 +485,44 @@ nsresult BrowserChildHelper::DoSendAsyncMessage(const nsAString& aMessage,
     embedFrame->mWindow = window->GetBrowsingContext();
   }
 
-  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, false, aData, nullptr);
-
-  mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame),
-                     nullptr, aMessage, false, aData, nullptr);
-
-  if (!mView->HasMessageListener(aMessage)) {
-    LOGW("Message not registered msg:%s\n", NS_ConvertUTF16toUTF8(aMessage).get());
-    return NS_OK;
-  }
-
-  JS::RootedValue rval(mozilla::dom::RootingCx());
-  JSContext *context = nsContentUtils::GetCurrentJSContext();
-
-
-  if (aData->HasData()) {
-    ErrorResult readRv;
-    aData->Read(context, &rval, readRv);
-    if (readRv.Failed()) {
-      readRv.SuppressException();
-      JS_ClearPendingException(context);
+  // Serialize before delivering to the in-process chrome listeners:
+  // StructuredCloneHolder::Read() consumes the clone buffer in ESR 153, so the
+  // first reader leaves nothing for the second. Read once, build the JSON for
+  // the embedder, and write the value back so the message managers still see
+  // the payload.
+  const bool forwardToView = mView->HasMessageListener(aMessage);
+  nsAutoString json;
+  if (forwardToView) {
+    JS::RootedValue rval(mozilla::dom::RootingCx());
+    JSContext *context = nsContentUtils::GetCurrentJSContext();
+    if (aData->HasData()) {
+      ErrorResult readRv;
+      aData->Read(context, &rval, readRv);
+      if (readRv.Failed()) {
+        readRv.SuppressException();
+        JS_ClearPendingException(context);
+        return NS_ERROR_UNEXPECTED;
+      }
+      ErrorResult writeRv;
+      aData->Write(context, rval, writeRv);
+      if (writeRv.Failed()) {
+        writeRv.SuppressException();
+        JS_ClearPendingException(context);
+        return NS_ERROR_UNEXPECTED;
+      }
+    }
+    // Check EmbedLiteJSON::JSONCreator and/or JS_Stringify from Android side
+    if (!JS_Stringify(context, &rval, nullptr, JS::NullHandleValue, EmbedLiteJSON::JSONCreator, &json)) {
       return NS_ERROR_UNEXPECTED;
     }
   }
 
-  nsAutoString json;
-  // Check EmbedLiteJSON::JSONCreator and/or JS_Stringify from Android side
-  if (!JS_Stringify(context, &rval, nullptr, JS::NullHandleValue, EmbedLiteJSON::JSONCreator, &json))  {
-    return NS_ERROR_UNEXPECTED;
-  }
+  globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, false, aData, nullptr);
+  mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, false, aData, nullptr);
 
-  if (json.IsEmpty()) {
-    return NS_ERROR_UNEXPECTED;
+  if (!forwardToView) {
+    LOGW("Message not registered msg:%s\n", NS_ConvertUTF16toUTF8(aMessage).get());
+    return NS_OK;
   }
 
   if (!mView->DoSendAsyncMessage(nsString(aMessage).get(), json.get())) {
