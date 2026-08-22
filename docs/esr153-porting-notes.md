@@ -67,3 +67,38 @@ applied in this tree. Template in each case: the nearest upstream in-tree user.
 - With ccache active, preprocessor failures (`fatal error: X.h: No such file`) are
   swallowed from the mach log; a silent `Error 1` on one object means: rebuild that
   object by hand in the snapshot without ccache to see the message.
+
+## 2026-08-22 evening — device state and open threads
+
+Working on device: mobile layout (dpr 3), UA rv:153.0, context menu, text
+selection, dialogs, forum, YouTube, WebAuthn up to the PIN prompt.
+Fixed today: duplicate libxul (clean Qt repos before switching Gecko targets),
+C++20 in qtmozembed, companion chain suffixes, nsOpenWindowInfo, profiler
+init, Services getters (Ci.* nsIID, no env/locale redefinitions), moz-src
+packaging, device scale (PuppetWidgetBase parent chain + recursive
+BackingScaleFactorChanged; __PREFS_WRITTEN__ marker after crashed first
+start), isDOMEventSynthesized, read-once message bridge (async + blocking),
+SearchService ES module port, search-config dumps for mobile/sailfishos,
+EmbedLiteAlertsService (embed:alert -> Nemo.Notifications), WebAuthnPromptHelper
+registration, view id resolution for iframe focus targets.
+
+Open, in order:
+1. WebAuthn PIN: add case "promptPassword" to openEmbedLitePrompt (Prompter.sys.mjs,
+   patch 0073): topic embed:auth / authresponse, passwordOnly, args.pass/args.ok.
+   QML: check the embed:auth popup supports a password-only layout.
+2. Address bar search: dumps are packaged, but RemoteSettings fails on
+   chrome IndexedDB (UnknownError getLastModified; storage/permanent/chrome).
+   Measure with MOZ_LOG=QuotaManager:5,IndexedDB:5 from startup.
+3. Web notifications: retest notif.html with the 18:48 xulrunner; report perm=.
+4. Cloudflare (ecosia): JS fingerprint, cookies, WebGL, input, focus, HTTP/3,
+   ECH all identical to ESR 140; ESR 140 passes. Next: MITM proxy on the Mind2,
+   diff the precursor POST payloads of both browsers.
+5. JS drifts: legacyHistory (session history), ContentLinkHandler window,
+   contentViewer->docViewer, nsISpeculativeConnect argument.
+6. Pointer capabilities + GetMaxTouchPoints (both browsers report a desktop
+   pointer profile; ui.primaryPointerCapabilities=1, ui.allPointerCapabilities=1
+   belong in embedding.js; GetMaxTouchPoints override in PuppetWidgetBase).
+7. Remove the EL-* GFX annotation probes before sharing packages.
+8. Check the esr153 branch for a maintenance release and rebase.
+Device notes: HW video decoding blocked by hybris linker namespace
+(libandroidicu.so not accessible to libmedia.so) — port issue, not Gecko.
