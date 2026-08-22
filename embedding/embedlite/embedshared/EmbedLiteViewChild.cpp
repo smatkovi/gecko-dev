@@ -251,8 +251,8 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
   // and finally creates nsIBaseWindow. When browsingContext is passed to
   // nsWebBrowser::Create, typeContentWrapper type is passed to the nsWebBrowser
   // upon instantiation.
-  mWebBrowser = nsWebBrowser::Create(mChrome, mWidget, browsingContext,
-                                     nullptr);
+  Unused << nsWebBrowser::Create(mChrome, mWidget, browsingContext, nullptr, nullptr,
+                                 getter_AddRefs(mWebBrowser));
   mWebBrowser->SetAllowDNSPrefetch(true);
 
   uint32_t chromeFlags = 0; // View()->GetWindowFlags();
@@ -1571,7 +1571,7 @@ EmbedLiteViewChild::OnFirstPaint(int32_t aX, int32_t aY)
     if (docShell) {
       RefPtr<PresShell> presShell = docShell->GetPresShell();
       if (presShell) {
-        nscolor bgcolor = presShell->GetCanvasBackground();
+        nscolor bgcolor = presShell->GetViewportCanvasBackground().mColor;
         Unused << SendSetBackgroundColor(bgcolor);
       }
     }

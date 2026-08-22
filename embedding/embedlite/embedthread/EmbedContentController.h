@@ -24,6 +24,9 @@ class EmbedContentController : public mozilla::layers::GeckoContentController
   typedef mozilla::layers::ZoomConstraints ZoomConstraints;
 
 public:
+  // GeckoContentController has pure-virtual refcounting upstream now.
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(EmbedContentController, override)
+
   EmbedContentController(EmbedLiteViewParent *aRenderFrame, nsISerialEventTarget *aUIThread);
   virtual ~EmbedContentController();
 
