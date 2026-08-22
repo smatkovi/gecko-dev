@@ -1415,6 +1415,9 @@ mozilla::ipc::IPCResult EmbedLiteViewChild::RecvMouseEvent(const nsString &aType
   data.mInputSource = mozilla::dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH;
   mozilla::dom::SynthesizeMouseEventOptions options;
   options.mIgnoreRootScrollFrame = aIgnoreRootScrollFrame;
+  // Embedder-driven events are real input, not test synthesis (the old
+  // sendMouseEvent call passed isDOMEventSynthesized=false).
+  options.mIsDOMEventSynthesized = false;
   mozilla::dom::Optional<mozilla::OwningNonNull<mozilla::dom::VoidFunction>> noCallback;
   mozilla::Unused << nsContentUtils::SynthesizeMouseEvent(
       presShell, widget, aType, refPoint, data, options, noCallback);
