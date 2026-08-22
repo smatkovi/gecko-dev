@@ -1286,7 +1286,7 @@ static KeyNameIndex getKeyNameIndexByDomKeyCode(int domKeyCode)
 #define KEY(key_, _codeNameIdx, _keyCode, _modifier)
 #define CONTROL(keyNameIdx_, _codeNameIdx, _keyCode) \
   if (domKeyCode == _keyCode) return KEY_NAME_INDEX_##keyNameIdx_;
-#include "KeyCodeConsensus_En_US.h"
+#include "KeyCodeConsensus_En_US.inc"
   return KEY_NAME_INDEX_USE_STRING;
 #undef CONTROL
 #undef KEY
