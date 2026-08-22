@@ -102,3 +102,22 @@ Open, in order:
 8. Check the esr153 branch for a maintenance release and rebase.
 Device notes: HW video decoding blocked by hybris linker namespace
 (libandroidicu.so not accessible to libmedia.so) — port issue, not Gecko.
+
+### 2026-08-22 late — release candidate state
+- WebAuthn/FIDO2 works end to end (USB HID, PIN via EmbedLite auth popup, registration and login on webauthn.io).
+  Fixes: webauthn_enable_usbtoken pref, WebAuthnPromptHelper registration + guards (no cancel on informational
+  prompts, auto-select first credential), Prompter promptPassword -> embed:auth (password-only), args.pass outside
+  the promptvalue guard, Fission answers in EmbedLiteXulAppInfo.
+- Address bar search still open: search-config dumps packaged, makeChannel allows file: sources, init handshake
+  runs (embedui:search init -> embed:search init with engines:[]), but the browser's loadxml replies never reach
+  EmbedLiteSearchEngine. Next: read ~/final7.log on the device (all embedui:search messages are logged now);
+  suspect the init reply (defaultEngine: null) being rejected by the Qt side.
+- Cloudflare managed challenge (ecosia, -challenge demo): server-side scoring rejects 153 before any click;
+  test-key Turnstile passes. JS fingerprint, cookies, WebGL, input, focus, geometry, HTTP/3, ECH identical to 140.
+  Next: mitmproxy on the Mind2, diff the precursor POST payloads.
+- Icon start: D-Bus activation (-prestart); a stale prestart instance holding the name blocks every start. The
+  booster instance (stock booster-browser) is masked; packaging should drop the Wants= drop-in and --type=browser.
+- Startup cache must be cleared after every component/libxul swap (fixed MOZ_BUILD_DATE).
+- Known drifts left: legacyHistory, ContentLinkHandler window, contentViewer, speculativeConnect, blocking message
+  return values (SelectionHandler InternalError), pointer capabilities/maxTouchPoints, EL-* GFX probes, HW video
+  (hybris linker namespace, port issue).
