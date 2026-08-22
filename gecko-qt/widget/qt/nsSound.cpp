@@ -4,11 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsSound.h"
+#include "nsIURL.h"
 
 NS_IMPL_ISUPPORTS(nsSound, nsISound)
-
-NS_IMETHODIMP
-nsSound::Play(nsIURL* aURL) { return NS_ERROR_NOT_IMPLEMENTED; }
 
 NS_IMETHODIMP
 nsSound::Beep() { return NS_ERROR_NOT_IMPLEMENTED; }

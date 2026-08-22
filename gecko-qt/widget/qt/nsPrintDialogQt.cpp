@@ -30,14 +30,16 @@ nsPrintDialogServiceQt::Init()
 NS_IMETHODIMP
 nsPrintDialogServiceQt::ShowPrintDialog(mozIDOMWindowProxy *aParent,
                                         bool aHaveSelection,
-                                        nsIPrintSettings* aSettings)
+                                        nsIPrintSettings* aSettings,
+                                        JSContext* aCx, mozilla::dom::Promise** aResult)
 {
     return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
 nsPrintDialogServiceQt::ShowPageSetupDialog(mozIDOMWindowProxy* aParent,
-                                            nsIPrintSettings* aNSSettings)
+                                            nsIPrintSettings* aNSSettings,
+                                            JSContext* aCx, mozilla::dom::Promise** aResult)
 {
     return NS_ERROR_NOT_IMPLEMENTED;
 }

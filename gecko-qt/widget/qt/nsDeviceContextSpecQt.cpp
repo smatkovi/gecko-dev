@@ -139,7 +139,7 @@ NS_IMETHODIMP nsDeviceContextSpecQt::Init(nsIPrintSettings* aPS,
 NS_IMETHODIMP nsDeviceContextSpecQt::BeginDocument(
         const nsAString& aTitle,
         const nsAString& aPrintToFileName,
-        int32_t aStartPage,
+        uint64_t aBrowsingContextId, int32_t aStartPage,
         int32_t aEndPage)
 {
     if (mToPrinter) {

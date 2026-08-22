@@ -21,7 +21,6 @@ class GfxInfo : public GfxInfoBase
 public:
   // We only declare the subset of nsIGfxInfo that we actually implement. The
   // rest is brought forward from GfxInfoBase.
-  NS_IMETHOD GetD2DEnabled(bool *aD2DEnabled) override;
   NS_IMETHOD GetDWriteEnabled(bool *aDWriteEnabled) override;
   NS_IMETHOD GetDWriteVersion(nsAString & aDwriteVersion) override;
   NS_IMETHOD GetHasBattery(bool* aHasBattery) override;
@@ -68,9 +67,9 @@ protected:
   virtual nsresult GetFeatureStatusImpl(int32_t aFeature,
                                         int32_t *aStatus,
                                         nsAString & aSuggestedDriverVersion,
-                                        const nsTArray<GfxDriverInfo>& aDriverInfo, nsACString &aFailureId,
+                                        const nsTArray<RefPtr<GfxDriverInfo>>& aDriverInfo, nsACString &aFailureId,
                                         OperatingSystem* aOS = nullptr) override;
-  virtual const nsTArray<GfxDriverInfo>& GetGfxDriverInfo() override;
+  virtual const nsTArray<RefPtr<GfxDriverInfo>>& GetGfxDriverInfo() override;
 };
 
 } // namespace widget
