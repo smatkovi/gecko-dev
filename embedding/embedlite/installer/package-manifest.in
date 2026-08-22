@@ -67,6 +67,8 @@
 
 ; [Components]
 ; JavaScript components
+; ESM modules served from moz-src:/// (SearchService.sys.mjs and friends)
+@BINPATH@/moz-src/*
 @BINPATH@/components/toolkitsearch.manifest
 
 @BINPATH@/components/extensions.manifest
