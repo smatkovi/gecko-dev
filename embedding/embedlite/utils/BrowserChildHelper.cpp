@@ -34,7 +34,6 @@
 #include "nsThreadUtils.h" // for mozilla::Runnable
 #include "mozilla/Preferences.h"
 #include "nsIFrame.h"
-#include "nsView.h"
 #include "nsLayoutUtils.h"
 #include "APZCCallbackHelper.h"
 #include "EmbedFrame.h"

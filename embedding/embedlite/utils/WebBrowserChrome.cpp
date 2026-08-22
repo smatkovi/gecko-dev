@@ -11,6 +11,7 @@
 #include "nsIDocShell.h"
 #include "nsIOService.h"
 #include "nsIWebProgress.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsPIDOMWindow.h"
 #include "nsNetUtil.h"
 #include "nsIDOMWindowUtils.h"
