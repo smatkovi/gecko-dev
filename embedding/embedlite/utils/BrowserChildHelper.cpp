@@ -557,7 +557,7 @@ BrowserChildHelper::GetWidget(nsPoint* aOffset)
   NS_ENSURE_TRUE(presShell, nullptr);
   nsIFrame* frame = presShell->GetRootFrame();
   if (frame) {
-    return frame->GetView()->GetWidget();
+    return frame->GetNearestWidget();
   }
 
   return nullptr;
