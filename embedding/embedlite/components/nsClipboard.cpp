@@ -116,7 +116,7 @@ nsEmbedClipboard::SetNativeClipboardData(nsITransferable* aTransferable,
 
 Result<nsCOMPtr<nsISupports>, nsresult>
 nsEmbedClipboard::GetNativeClipboardData(const nsACString& aFlavor,
-                                         ClipboardType aWhichClipboard)
+                                         ClipboardType aWhichClipboard, uint64_t /* aThreshold */)
 {
   MOZ_DIAGNOSTIC_ASSERT(
     nsIClipboard::IsClipboardTypeSupported(aWhichClipboard));
