@@ -121,3 +121,7 @@ Device notes: HW video decoding blocked by hybris linker namespace
 - Known drifts left: legacyHistory, ContentLinkHandler window, contentViewer, speculativeConnect, blocking message
   return values (SelectionHandler InternalError), pointer capabilities/maxTouchPoints, EL-* GFX probes, HW video
   (hybris linker namespace, port issue).
+- ID Austria login (login.id-austria.gv.at) rejects the password in BOTH ESR140 and ESR153 ports; the password
+  field receives the pasted string byte-exact (verified with a test page), so this is server-side evaluation,
+  same family as the Cloudflare managed challenge. Add to the MITM comparison.
+- viewIdFor now tries the element window before its top-level window (embedlite-components c8…, 23:4x build).
