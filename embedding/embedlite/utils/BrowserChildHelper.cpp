@@ -408,31 +408,40 @@ BrowserChildHelper::DoSendBlockingMessage(const nsAString& aMessage,
     embedFrame->mWindow = window->GetBrowsingContext();
   }
 
+  // Same ordering rule as DoSendAsyncMessage: read the clone buffer once,
+  // build the JSON for the embedder, write the value back, then deliver.
+  const bool forwardToView = mView->HasMessageListener(aMessage);
+  nsAutoString json;
+  if (forwardToView) {
+    JS::RootedValue rval(mozilla::dom::RootingCx());
+    JSContext *context = nsContentUtils::GetCurrentJSContext();
+    if (aData->HasData()) {
+      ErrorResult readRv;
+      aData->Read(context, &rval, readRv);
+      if (readRv.Failed()) {
+        readRv.SuppressException();
+        JS_ClearPendingException(context);
+        return false;
+      }
+      ErrorResult writeRv;
+      aData->Write(context, rval, writeRv);
+      if (writeRv.Failed()) {
+        writeRv.SuppressException();
+        JS_ClearPendingException(context);
+        return false;
+      }
+    }
+    NS_ENSURE_TRUE(JS_Stringify(context, &rval, nullptr, JS::NullHandleValue, EmbedLiteJSON::JSONCreator, &json), false);
+    NS_ENSURE_TRUE(!json.IsEmpty(), false);
+  }
+
   globalMessageManager->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, aData, aRetVal);
   mm->ReceiveMessage(static_cast<EventTarget *>(embedFrame), nullptr, aMessage, true, aData, aRetVal);
 
-  if (!mView->HasMessageListener(aMessage)) {
+  if (!forwardToView) {
     LOGE("Message not registered msg:%s\n", NS_ConvertUTF16toUTF8(aMessage).get());
     return true;
   }
-
-  // FIXME: Need callback interface for simple JSON to avoid useless conversion here
-  JS::RootedValue rval(mozilla::dom::RootingCx());
-  JSContext *context = nsContentUtils::GetCurrentJSContext();
-
-  if (aData->HasData()) {
-    ErrorResult readRv;
-    aData->Read(context, &rval, readRv);
-    if (readRv.Failed()) {
-      readRv.SuppressException();
-      JS_ClearPendingException(context);
-      return false;
-    }
-  }
-
-  nsAutoString json;
-  NS_ENSURE_TRUE(JS_Stringify(context, &rval, nullptr, JS::NullHandleValue, EmbedLiteJSON::JSONCreator, &json), false);
-  NS_ENSURE_TRUE(!json.IsEmpty(), false);
 
   // FIXME : Return value should be written to nsTArray<StructuredCloneData> *aRetVal
   nsTArray<nsString> jsonRetVal;
