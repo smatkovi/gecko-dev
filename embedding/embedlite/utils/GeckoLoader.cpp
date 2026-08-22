@@ -105,13 +105,12 @@ GeckoLoader::InitEmbedding(const char* aProfilePath)
   IOInterposer::Init();
 #endif
 
-  // Android FF is using baseprofiler, I'm not sure if we'd benefit of it.
+  // The Gecko profiler is unconditional since Bug 1635350 (MOZ_GECKO_PROFILER is gone);
+// profiler_init() must run before any other profiler call.
   // This call must happen before any other profiler calls and main thread
   // must be set. See GeckoProfiler.h.
-#ifdef MOZ_GECKO_PROFILER
   char aLocal;
   profiler_init(&aLocal);
-#endif
 
   const char* greHome = getenv("GRE_HOME");
   if (!greHome) {
@@ -288,10 +287,8 @@ GeckoLoader::TermEmbedding()
 
   NS_ShutdownXPCOM(nullptr);
 
-#ifdef MOZ_GECKO_PROFILER
   // This must precede NS_LogTerm().
   profiler_shutdown();
-#endif
 
   NS_LogTerm();
 
