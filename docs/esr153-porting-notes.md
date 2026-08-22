@@ -125,3 +125,16 @@ Device notes: HW video decoding blocked by hybris linker namespace
   field receives the pasted string byte-exact (verified with a test page), so this is server-side evaluation,
   same family as the Cloudflare managed challenge. Add to the MITM comparison.
 - viewIdFor now tries the element window before its top-level window (embedlite-components c8…, 23:4x build).
+
+### armv7hl (32-bit) build attempt, 2026-08-23 early
+Separate tree at ~/share/esr153-armv7hl (branch fork-esr153-armv7hl in the overlay), SDK target
+SailfishOS-5.2.0.15-armv7hl. Hurdles cleared: the copied tree needs an empty obj-build-mer-qt-xr and a real
+%prep run (mb2 build -p; it refuses on a dirty work tree, and every failed run dirties build/config.status and
+config/milestone.txt in the inner repo — git checkout -- . before each retry). rust-std for
+armv7-unknown-linux-gnueabihf had to be installed into ~/rust190root (standalone install.sh from
+static.rust-lang.org, same 1.90.0 as the existing aarch64/i686 targets).
+Open hurdle: cargo build scripts compile for the host with host-cc but inherit the ARM CFLAGS
+(-mthumb, -mfpu=neon are rejected). Setting HOST_CFLAGS/HOST_CXXFLAGS globally is wrong — the target
+compiler then gets -m32/-march=i686 (reverted). The fix belongs in the %ifarch %arm32 branch, tripel-scoped
+like the existing CFLAGS_i686_unknown_linux_gnu, or by clearing CFLAGS only for the build-script invocation.
+The real test (linking a 277 MB libxul in a 32-bit address space) is still ahead of that.
