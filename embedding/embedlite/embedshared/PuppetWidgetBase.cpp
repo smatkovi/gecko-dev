@@ -7,6 +7,7 @@
 
 #include "EmbedLog.h"
 #include "PuppetWidgetBase.h"
+#include "mozilla/PresShell.h"
 
 #include "mozilla/Unused.h"
 
@@ -244,6 +245,19 @@ PuppetWidgetBase::Invalidate(const LayoutDeviceIntRect &aRect)
 
   // WillPaintWindow/DidPaintWindow were removed upstream (Bug 337801);
   // painting is driven by the compositor.
+}
+
+void
+PuppetWidgetBase::NotifyBackingScaleFactorChanged()
+{
+  if (nsIWidgetListener* listener = GetWidgetListener()) {
+    if (PresShell* presShell = listener->GetPresShell()) {
+      presShell->BackingScaleFactorChanged();
+    }
+  }
+  for (ChildrenArray::size_type i = 0; i < mChildren.Length(); i++) {
+    mChildren[i]->NotifyBackingScaleFactorChanged();
+  }
 }
 
 double

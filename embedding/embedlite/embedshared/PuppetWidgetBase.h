@@ -78,6 +78,8 @@ public:
 
   virtual WindowRenderer* GetWindowRenderer() override;
   virtual double GetDefaultScaleInternal() override;
+  // Tell this widget and all child widgets that the device scale changed.
+  void NotifyBackingScaleFactorChanged();
 
   static void DumpWidgetTree();
   static void DumpWidgetTree(const nsTArray<PuppetWidgetBase *> &widgets, int indent = 0);

@@ -130,11 +130,8 @@ nsWindow::GetDefaultScaleInternal()
 void
 nsWindow::BackingScaleFactorChanged()
 {
-  if (mWidgetListener) {
-    if (PresShell* presShell = mWidgetListener->GetPresShell()) {
-      presShell->BackingScaleFactorChanged();
-    }
-  }
+  // The documents live in the child (view) widgets, not in the top-level window.
+  NotifyBackingScaleFactorChanged();
 }
 
 void
