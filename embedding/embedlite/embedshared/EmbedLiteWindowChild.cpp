@@ -244,7 +244,7 @@ void EmbedLiteWindowChild::CreateWidget()
   Unused << mWidget->Create(
               nullptr,                 // no parent
               mBounds,
-              &widgetInit              // HandleWidgetEvent
+              widgetInit              // HandleWidgetEvent
               );
   GetWidget()->UpdateBounds(true);
 
@@ -268,7 +268,7 @@ void EmbedLiteWindowChild::RefreshScreen()
   auto screen = MakeRefPtr<widget::Screen>(
       rect, rect, mDepth, mDepth, 0, DesktopToLayoutDeviceScale(density),
       CSSToLayoutDeviceScale(density), mDpi,
-      widget::Screen::IsPseudoDisplay::No, widget::Screen::IsHDR::No);
+      widget::Screen::IsPseudoDisplay::No, widget::Screen::IsHDR::No, 80.0f, 80.0f);
   screenList.AppendElement(screen.forget());
   widget::ScreenManager::Refresh(std::move(screenList));
 }

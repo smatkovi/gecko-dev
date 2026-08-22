@@ -8,7 +8,7 @@
 #ifndef mozilla_embedlite_PuppetWidgetBase_h__
 #define mozilla_embedlite_PuppetWidgetBase_h__
 
-#include "nsBaseWidget.h"
+#include "nsIWidget.h"
 
 namespace mozilla {
 
@@ -21,9 +21,9 @@ public:
   virtual void WidgetRotationChanged(const mozilla::ScreenRotation&) {};
 };
 
-class PuppetWidgetBase : public nsBaseWidget
+class PuppetWidgetBase : public nsIWidget
 {
-  typedef nsBaseWidget Base;
+  typedef nsIWidget Base;
 
   // The width and height of the "widget" are clamped to this.
   static const size_t kMaxDimension;
@@ -33,10 +33,9 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  using nsBaseWidget::Create; // for Create signature not overridden here
-  [[nodiscard]] virtual nsresult Create(nsIWidget*        aParent,
-                                       const LayoutDeviceIntRect& aRect,
-                                       widget::InitData* aInitData = nullptr) override;
+  using nsIWidget::Create; // for Create signature not overridden here
+  [[nodiscard]] virtual nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+                  const widget::InitData& aInitData) override;
 
   virtual void Destroy() override;
 
@@ -46,11 +45,10 @@ public:
 
   virtual void ConstrainPosition(DesktopIntPoint& aPoint) override;
 
-  virtual void Move(double aX, double aY) override;
+  virtual void Move(const DesktopPoint& aPoint) override;
 
-  virtual void Resize(double aWidth, double aHeight, bool aRepaint) override;
-  virtual void Resize(double aX, double aY, double aWidth, double aHeight,
-                      bool aRepaint) override;
+  virtual void Resize(const DesktopSize& aSize, bool aRepaint) override;
+  virtual void Resize(const DesktopRect& aRect, bool aRepaint) override;
 
   virtual void Enable(bool aState) override;
   virtual bool IsEnabled() const override;
@@ -64,6 +62,8 @@ public:
   virtual mozilla::LayoutDeviceIntPoint WidgetToScreenOffset() override;
 
   virtual void Invalidate(const LayoutDeviceIntRect& aRect) override;
+
+  virtual LayoutDeviceIntRect GetBounds() override { return mBounds; }
 
   virtual void CaptureRollupEvents(bool aDoCapture) override;
 
@@ -97,6 +97,10 @@ protected:
   bool mVisible;
   bool mEnabled;
   bool mActive;
+
+  // Formerly nsIWidget members (upstream Bug 1994157 merged it into nsIWidget).
+  LayoutDeviceIntRect mBounds;
+  nsSizeMode mSizeMode = nsSizeMode_Normal;
 
   ChildrenArray mChildren;
   ObserverArray mObservers;

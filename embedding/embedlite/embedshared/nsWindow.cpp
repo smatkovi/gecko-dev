@@ -39,8 +39,7 @@ using namespace mozilla::widget;
 namespace mozilla {
 namespace embedlite {
 
-NS_IMPL_ISUPPORTS_INHERITED(nsWindow, PuppetWidgetBase,
-                            nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS_INHERITED0(nsWindow, PuppetWidgetBase)
 
 nsWindow::nsWindow(EmbedLiteWindowChild *window)
   : PuppetWidgetBase()
@@ -52,7 +51,7 @@ nsWindow::nsWindow(EmbedLiteWindowChild *window)
 
 nsresult
 nsWindow::Create(nsIWidget *aParent, const LayoutDeviceIntRect &aRect,
-                 widget::InitData *aInitData)
+                 const widget::InitData &aInitData)
 {
   LOGT();
   Unused << PuppetWidgetBase::Create(aParent, aRect, aInitData);
@@ -78,13 +77,6 @@ nsWindow::Destroy()
 #endif
 }
 
-NS_IMETHODIMP
-nsWindow::DispatchEvent(mozilla::WidgetGUIEvent *aEvent, nsEventStatus &aStatus)
-{
-  aStatus = DispatchEvent(aEvent);
-  return NS_OK;
-}
-
 void
 nsWindow::SetInputContext(const InputContext &aContext, const InputContextAction &aAction)
 {
@@ -105,9 +97,11 @@ nsWindow::Show(bool aState)
 }
 
 void
-nsWindow::Resize(double aWidth, double aHeight, bool aRepaint)
+nsWindow::Resize(const DesktopSize& aSize, bool aRepaint)
 {
-  PuppetWidgetBase::Resize(aWidth, aHeight, aRepaint);
+  const double aWidth = aSize.width;
+  const double aHeight = aSize.height;
+  PuppetWidgetBase::Resize(aSize, aRepaint);
   if (GetCompositorBridgeParent()) {
     static_cast<EmbedLiteCompositorBridgeParent*>(GetCompositorBridgeParent())->
         SetSurfaceRect(mNaturalBounds.x, mNaturalBounds.y, mNaturalBounds.width, mNaturalBounds.height);
@@ -164,7 +158,7 @@ nsWindow::CreateCompositor(int aWidth, int aHeight)
     LOGT("EL-CC compositor session exists - skip rebuild");
     return;
   }
-  nsBaseWidget::CreateCompositor(aWidth, aHeight);
+  nsIWidget::CreateCompositor(aWidth, aHeight);
   // 140-Fix: Eine frische CompositorSession kennt keinen ContentController.
   // Der Stack existiert genau fuer Restaurierung - beim Session-Neuaufbau
   // (Seitenwechsel) aber fragte ihn niemand ab: HandleTap blieb stumm.
@@ -405,9 +399,9 @@ nsEventStatus
 nsWindow::DispatchEvent(mozilla::WidgetGUIEvent *aEvent)
 {
   if (mAttachedWidgetListener) {
-      return mAttachedWidgetListener->HandleEvent(aEvent, mUseAttachedEvents);
+      return mAttachedWidgetListener->HandleEvent(aEvent);
   } else if (mWidgetListener) {
-      return mWidgetListener->HandleEvent(aEvent, mUseAttachedEvents);
+      return mWidgetListener->HandleEvent(aEvent);
   }
   return nsEventStatus_eIgnore;
 }

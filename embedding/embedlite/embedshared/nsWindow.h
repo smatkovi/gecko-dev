@@ -29,18 +29,12 @@ public:
 
 
   using PuppetWidgetBase::Create; // for Create signature not overridden here
-  [[nodiscard]] virtual nsresult Create(nsIWidget*        aParent,
-                                        const LayoutDeviceIntRect& aRect,
-                                        widget::InitData* aInitData = nullptr) override;
+  [[nodiscard]] virtual nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+                  const widget::InitData& aInitData) override;
 
   virtual void Destroy() override;
   virtual void Show(bool aState) override;
-  virtual void Resize(double aWidth,
-                      double aHeight,
-                      bool aRepaint) override;
-
-  virtual nsresult  DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
-                                  nsEventStatus& aStatus) override;
+  virtual void Resize(const DesktopSize& aSize, bool aRepaint) override;
 
   virtual void SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction) override;

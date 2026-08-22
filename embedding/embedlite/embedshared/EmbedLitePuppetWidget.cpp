@@ -32,8 +32,7 @@ using namespace mozilla::widget;
 namespace mozilla {
 namespace embedlite {
 
-NS_IMPL_ISUPPORTS_INHERITED(EmbedLitePuppetWidget, PuppetWidgetBase,
-                            nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS_INHERITED0(EmbedLitePuppetWidget, PuppetWidgetBase)
 
 EmbedLitePuppetWidget::EmbedLitePuppetWidget(EmbedLiteViewChildIface* view)
   : PuppetWidgetBase()
@@ -60,16 +59,16 @@ const char *EmbedLitePuppetWidget::Type() const
 nsresult
 EmbedLitePuppetWidget::Create(nsIWidget* aParent,
                               const LayoutDeviceIntRect& aRect,
-                              widget::InitData* aInitData)
+                              const widget::InitData& aInitData)
 {
-  if (aInitData && aInitData->mWindowType == widget::WindowType::Popup) {
+  if (aInitData.mWindowType == widget::WindowType::Popup) {
     aParent = nullptr;
   }
   return PuppetWidgetBase::Create(aParent, aRect, aInitData);
 }
 
 already_AddRefed<nsIWidget>
-EmbedLitePuppetWidget::AllocateChildPuppetWidget(widget::InitData&)
+EmbedLitePuppetWidget::AllocateChildPuppetWidget(const widget::InitData&)
 {
   if (Destroyed()) {
     return nullptr;
@@ -128,11 +127,12 @@ EmbedLitePuppetWidget::GetNativeData(uint32_t aDataType)
   return nullptr;
 }
 
-nsresult
-EmbedLitePuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
+nsEventStatus
+EmbedLitePuppetWidget::DispatchEvent(WidgetGUIEvent* event)
 {
+  nsEventStatus aStatus = nsEventStatus_eIgnore;
   if (Destroyed()) {
-    return NS_OK;
+    return aStatus;
   }
 
   LOGT();
@@ -165,7 +165,7 @@ EmbedLitePuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStat
   }
 
   if (listener) {
-    aStatus = listener->HandleEvent(event, mUseAttachedEvents);
+    aStatus = listener->HandleEvent(event);
   } else {
     aStatus = nsEventStatus_eIgnore;
   }
@@ -189,7 +189,7 @@ EmbedLitePuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStat
       break;
   }
 
-  return NS_OK;
+  return aStatus;
 }
 
 void
@@ -314,7 +314,7 @@ EmbedLitePuppetWidget::GetDPI()
     if (mView) {
       mView->GetDPI(&mDPI);
     } else {
-      mDPI = nsBaseWidget::GetDPI();
+      mDPI = nsIWidget::GetDPI();
     }
   }
 

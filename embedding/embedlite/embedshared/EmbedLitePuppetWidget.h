@@ -38,9 +38,8 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   using PuppetWidgetBase::Create;
-  [[nodiscard]] nsresult Create(nsIWidget* aParent,
-                                const LayoutDeviceIntRect& aRect,
-                                widget::InitData* aInitData = nullptr) override;
+  [[nodiscard]] nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+                  const widget::InitData& aInitData) override;
 
   virtual void Destroy() override;
 
@@ -48,7 +47,7 @@ public:
 
   virtual void* GetNativeData(uint32_t aDataType) override;
 
-  virtual nsresult DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus) override;
+  virtual nsEventStatus DispatchEvent(WidgetGUIEvent* event) override;
 
   virtual void SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction) override;
@@ -84,7 +83,7 @@ public:
 protected:
   virtual ~EmbedLitePuppetWidget() override;
   already_AddRefed<nsIWidget> AllocateChildPuppetWidget(
-      widget::InitData& aInitData) override;
+      const widget::InitData& aInitData) override;
   EmbedLiteViewChildIface* GetEmbedLiteChildView() const;
 
   virtual void ConfigureAPZCTreeManager();

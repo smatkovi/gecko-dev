@@ -22,9 +22,7 @@ const size_t PuppetWidgetBase::kMaxDimension = 4000;
 
 static nsTArray<PuppetWidgetBase*> gTopLevelWindows;
 
-NS_IMPL_ISUPPORTS_INHERITED(PuppetWidgetBase,
-                            nsBaseWidget,
-                            nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS_INHERITED0(PuppetWidgetBase, nsIWidget)
 
 PuppetWidgetBase::PuppetWidgetBase()
   : nsBaseWidget()
@@ -41,7 +39,7 @@ PuppetWidgetBase::PuppetWidgetBase()
 
 nsresult
 PuppetWidgetBase::Create(nsIWidget *aParent, const LayoutDeviceIntRect &aRect,
-                         widget::InitData *aInitData)
+                         const widget::InitData &aInitData)
 {
   LOGT("Puppet: %p, parent: %p", this, aParent);
 
@@ -146,17 +144,18 @@ PuppetWidgetBase::ConstrainPosition(DesktopIntPoint& aPoint)
 
 // We're always at <0, 0>, and so ignore move requests.
 void
-PuppetWidgetBase::Move(double aX, double aY)
+PuppetWidgetBase::Move(const DesktopPoint& aPoint)
 {
-  (void)aX;
-  (void)aY;
+  (void)aPoint;
 
   LOGNI();
 }
 
 void
-PuppetWidgetBase::Resize(double aWidth, double aHeight, bool aRepaint)
+PuppetWidgetBase::Resize(const DesktopSize& aSize, bool aRepaint)
 {
+  const double aWidth = aSize.width;
+  const double aHeight = aSize.height;
   if (Destroyed()) {
     return;
   }
@@ -174,7 +173,7 @@ PuppetWidgetBase::Resize(double aWidth, double aHeight, bool aRepaint)
   }
 
   for (ChildrenArray::size_type i = 0; i < mChildren.Length(); i++) {
-    mChildren[i]->Resize(aWidth, aHeight, aRepaint);
+    mChildren[i]->Resize(aSize, aRepaint);
   }
 
   if (aRepaint) {
@@ -184,16 +183,14 @@ PuppetWidgetBase::Resize(double aWidth, double aHeight, bool aRepaint)
   nsIWidgetListener* listener =
     mAttachedWidgetListener ? mAttachedWidgetListener : mWidgetListener;
   if (!oldBounds.IsEqualEdges(mBounds) && listener) {
-    listener->WindowResized(this, mBounds.width, mBounds.height);
+    listener->WindowResized(this, mBounds.Size());
   }
 }
 
 void
-PuppetWidgetBase::Resize(double aX, double aY, double aWidth, double aHeight, bool aRepaint)
+PuppetWidgetBase::Resize(const DesktopRect& aRect, bool aRepaint)
 {
-  (void)aX;
-  (void)aY;
-  Resize(aWidth, aHeight, aRepaint);
+  Resize(aRect.Size(), aRepaint);
 }
 
 void
@@ -245,15 +242,8 @@ PuppetWidgetBase::Invalidate(const LayoutDeviceIntRect &aRect)
     return;
   }
 
-  nsIWidgetListener* listener = GetWidgetListener();
-  if (listener) {
-    listener->WillPaintWindow(this);
-  }
-
-  listener = GetWidgetListener();
-  if (listener) {
-    listener->DidPaintWindow();
-  }
+  // WillPaintWindow/DidPaintWindow were removed upstream (Bug 337801);
+  // painting is driven by the compositor.
 }
 
 void
@@ -387,7 +377,7 @@ PuppetWidgetBase::UpdateBounds(bool aRepaint)
   nsIWidgetListener* listener =
     mAttachedWidgetListener ? mAttachedWidgetListener : mWidgetListener;
   if (!oldBounds.IsEqualEdges(mBounds) && listener) {
-    listener->WindowResized(this, mBounds.width, mBounds.height);
+    listener->WindowResized(this, mBounds.Size());
   }
 
 #ifdef DEBUG

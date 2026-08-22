@@ -202,7 +202,7 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
 
   LayoutDeviceIntRect naturalBounds = mWindow->GetWidget()->GetNaturalBounds();
   nsresult rv =
-    mWidget->Create(mWindow->GetWidget(), naturalBounds, &widgetInit);
+    mWidget->Create(mWindow->GetWidget(), naturalBounds, widgetInit);
 
   if (NS_FAILED(rv)) {
     NS_ERROR("Failed to create widget for EmbedLiteView");
@@ -1203,7 +1203,7 @@ mozilla::ipc::IPCResult EmbedLiteViewChild::RecvHandleTextEvent(const nsString &
   if (replacementLength > 0) {
     nsEventStatus status;
     WidgetQueryContentEvent selection(true, eQuerySelectedText, widget);
-    widget->DispatchEvent(&selection, status);
+    status = widget->DispatchEvent(&selection);
 
     if (selection.Succeeded()) {
       // Set selection to delete
@@ -1212,12 +1212,12 @@ mozilla::ipc::IPCResult EmbedLiteViewChild::RecvHandleTextEvent(const nsString &
       selectionEvent.mLength = replacementLength;
       selectionEvent.mReversed = false;
       selectionEvent.mExpandToClusterBoundary = false;
-      widget->DispatchEvent(&selectionEvent, status);
+      status = widget->DispatchEvent(&selectionEvent);
 
       if (selectionEvent.mSucceeded) {
         // Delete the selection
         WidgetContentCommandEvent deleteCommandEvent(true, eContentCommandDelete, widget);
-        widget->DispatchEvent(&deleteCommandEvent, status);
+        status = widget->DispatchEvent(&deleteCommandEvent);
       }
     }
   }
@@ -1338,7 +1338,8 @@ nsresult EmbedLiteViewChild::DispatchKeyPressEvent(nsIWidget *widget, const Even
     event.mKeyNameIndex = KEY_NAME_INDEX_Enter;
   }
   nsEventStatus status;
-  return widget->DispatchEvent(&event, status);
+  status = widget->DispatchEvent(&event);
+  return NS_OK;
 }
 
 mozilla::ipc::IPCResult EmbedLiteViewChild::RecvHandleKeyPressEvent(const int &domKeyCode,
