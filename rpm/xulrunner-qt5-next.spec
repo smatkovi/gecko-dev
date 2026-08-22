@@ -1,5 +1,6 @@
-%define greversion    140.12.0
-%define milestone     %{greversion}
+%define greversion    153.2.0
+# Keep milestone.txt (configured MOZILLA_VERSION) at 140.12.0: changing it reconfigures and rebuilds the whole tree.
+%define milestone     140.12.0
 
 %define embedlite_config merqtxulrunner
 
@@ -46,7 +47,7 @@
 %bcond_with git_workaround
 
 
-Name:       xulrunner-qt5-next
+Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
 Release:    2
@@ -616,6 +617,9 @@ touch /var/lib/_MOZEMBED_CACHE_CLEAN_
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Sat Aug 22 2026 Sebastian Matkovich <smatkovi> - 153.2.0-1
+- Gecko ESR 153 transplant of the EmbedLite series, third install name (-next153)
+
 * Fri Aug 21 2026 Sebastian Matkovich <smatkovi> - 140.12.0-2
 - Fix constant 100% CPU spinning of an idle core (AppShell could
   never block on non-Qt threads; DummyEvent ping-pong)
