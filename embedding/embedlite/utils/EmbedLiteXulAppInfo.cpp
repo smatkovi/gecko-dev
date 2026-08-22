@@ -220,19 +220,23 @@ NS_IMETHODIMP EmbedLiteXulAppInfo::GetWin32kSessionStatus(
 /* readonly attribute boolean fissionAutostart; */
 NS_IMETHODIMP EmbedLiteXulAppInfo::GetFissionAutostart(bool *aFissionAutostart)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  // EmbedLite runs a single process; Fission is never enabled.
+  *aFissionAutostart = false;
+  return NS_OK;
 }
 
 /* readonly attribute nsIXULRuntime_FissionDecisionStatus fissionDecisionStatus; */
 NS_IMETHODIMP EmbedLiteXulAppInfo::GetFissionDecisionStatus(nsIXULRuntime::FissionDecisionStatus *aFissionDecisionStatus)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  *aFissionDecisionStatus = eFissionDisabledByDefault;
+  return NS_OK;
 }
 
 /* readonly attribute ACString fissionDecisionStatusString; */
 NS_IMETHODIMP EmbedLiteXulAppInfo::GetFissionDecisionStatusString(nsACString& aFissionDecisionStatusString)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  aFissionDecisionStatusString.AssignLiteral("disabledByDefault");
+  return NS_OK;
 }
 
 /* readonly attribute boolean sessionHistoryInParent; */
