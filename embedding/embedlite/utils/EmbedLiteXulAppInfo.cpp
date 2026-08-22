@@ -90,6 +90,20 @@ NS_IMETHODIMP EmbedLiteXulAppInfo::GetName(nsACString& aName)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+EmbedLiteXulAppInfo::GetRemotingName(nsACString& aRemotingName)
+{
+  // nsIXULRuntime.remotingName (new in 153): use the application name.
+  return GetName(aRemotingName);
+}
+
+NS_IMETHODIMP
+EmbedLiteXulAppInfo::MarkProfileEncryptedDatabases()
+{
+  // nsIXULRuntime.markProfileEncryptedDatabases (new in 153): nothing to track here.
+  return NS_OK;
+}
+
 NS_IMETHODIMP EmbedLiteXulAppInfo::GetUAName(nsACString& aUAName)
 {
   aUAName.Assign("Firefox");

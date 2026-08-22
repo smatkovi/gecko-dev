@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "EmbedLog.h"
+#include "nsPIDOMWindowInlines.h"  // inline nsPIDOMWindowOuter::GetDocShell()
 
 #include "nsIWidget.h"
 
