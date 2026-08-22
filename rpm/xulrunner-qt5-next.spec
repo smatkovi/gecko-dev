@@ -349,6 +349,8 @@ echo "export CARGO_CFG_TARGET_ARCH=aarch64" >> "%BUILD_DIR"/rpm-shared.env
 # only when we're building from tarball (OBS)
 # If you want to have a fixed date, then uncomment the line below
 echo "export MOZ_BUILD_DATE=20260822000000" >> "%BUILD_DIR"/rpm-shared.env
+# ccache for the C/C++ compiles: mach honours $CCACHE like --with-ccache, and the tooling binary is visible inside sb2.
+echo "export CCACHE=/srv/mer/toolings/SailfishOS-5.2.0.15/usr/bin/ccache" >> "%BUILD_DIR"/rpm-shared.env
 for a in %{_sourcedir}/*.tar.bz2; do
     if [ -f $a ]; then
         TARBALL_DATE=`stat -c %Y $a`
