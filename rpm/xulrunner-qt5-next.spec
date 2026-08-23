@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    2
+Release:    3
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -621,6 +621,12 @@ touch /var/lib/_MOZEMBED_CACHE_CLEAN_
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Sun Aug 23 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-3
+- Report the Android platform token so bot management no longer sees a mobile UA with an X11 platform (Cloudflare managed challenges pass now)
+- Load bundled OpenSearch engines without a necko channel and answer the Fission queries; address bar search works
+- Route the WebAuthn PIN prompt through the EmbedLite auth popup; FIDO2 USB tokens work end to end
+- Milestone follows the engine version, so the user agent reports 153
+
 * Sat Aug 22 2026 Sebastian Matkovich <smatkovi> - 153.2.0-1
 - Gecko ESR 153 transplant of the EmbedLite series, third install name (-next153)
 
