@@ -138,3 +138,26 @@ Open hurdle: cargo build scripts compile for the host with host-cc but inherit t
 compiler then gets -m32/-march=i686 (reverted). The fix belongs in the %ifarch %arm32 branch, tripel-scoped
 like the existing CFLAGS_i686_unknown_linux_gnu, or by clearing CFLAGS only for the build-script invocation.
 The real test (linking a 277 MB libxul in a 32-bit address space) is still ahead of that.
+
+### 2026-08-23 (late): the compositor path opened up
+Three findings, in order of how much they matter:
+1. gfxVars::SetUseEGL(true) is only ever called from the GTK backend, so on EmbedLite
+   RenderCompositorEGL::Create() bailed out on its first line and the offscreen path
+   was never entered. Now set in gfxPlatform::Init() under MOZ_EMBEDLITE.
+2. gfx.egl.prefer-gles.enabled defaults to false off Android, so Gecko tried desktop GL
+   first (eglBindAPI(EGL_OPENGL_API) -> EGL_BAD_ATTRIBUTE on Adreno). Now in embedding.js.
+3. SwapChain now tracks how many Acquire() calls ago each SharedSurface was last used
+   and RenderCompositorEGL::GetBufferAge() reports it, which is what EGL_BUFFER_AGE_EXT
+   would give. Partial present works with it.
+
+Measured on scroll2.html (viewport meta, 20s of scrolling), Xperia 10 V:
+  software WR, no picture caching:        med 16.3  p95 17.3  max 199.8  7/400 over 32ms
+  EGL, no picture caching, no age:        med 16.6  p95 167.3 max 349.8  39/400
+  EGL, no picture caching, with age:      med 16.4  p95 17.3  max 232.9  7/400   <- clean
+  EGL, picture caching, with age:         med 16.3  p95 17.3  max 34.2   3/400   <- artefacts
+  software WR, picture caching, with age: med 17.1  p95 167.0 max 350.0  63/400
+
+So EGL + buffer age is already as good as software and runs on the GPU. Picture caching
+on top is clearly the fastest (max drops to 34ms) but still paints stale tiles, because
+RenderCompositorEGL::SetBufferDamageRegion() returns early for mUseEmbedLiteOffscreen —
+WebRender's damage rects are thrown away. That is the next patch.
