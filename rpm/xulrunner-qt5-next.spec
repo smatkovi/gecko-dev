@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    3
+Release:    4
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -621,6 +621,9 @@ touch /var/lib/_MOZEMBED_CACHE_CLEAN_
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Sun Aug 23 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-4
+- Going back no longer crashes: the traversable unload check assumed a content process
+
 * Sun Aug 23 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-3
 - Report the Android platform token so bot management no longer sees a mobile UA with an X11 platform (Cloudflare managed challenges pass now)
 - Load bundled OpenSearch engines without a necko channel and answer the Fission queries; address bar search works
