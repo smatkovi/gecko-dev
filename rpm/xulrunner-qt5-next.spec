@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    8
+Release:    9
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -635,6 +635,15 @@ done
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Mon Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-9
+- Shut down the layers IPC chain, not just the ImageBridgeChild: the WebRender
+  render thread was never stopped, kept running while the process was torn
+  down, and died jumping into unloaded code (SIGSEGV in thread "Renderer").
+  Gecko read that crash as a graphics fault on the next start and wrote
+  layers.acceleration.disabled=true into the profile, so the browser fell back
+  to software WebRender for good - which is where the artefacts on older
+  devices came from
+
 * Mon Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-8
 - Fix a segfault on shutdown on older GPUs (Adreno 510): the compositor
   destructor was not releasing mFrontBuffer before tearing down, so the

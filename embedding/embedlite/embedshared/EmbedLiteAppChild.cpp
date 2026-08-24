@@ -244,7 +244,15 @@ EmbedLiteAppChild::GetWindowByID(uint32_t aWindowID)
 mozilla::ipc::IPCResult EmbedLiteAppChild::RecvPreDestroy()
 {
   LOGT();
-  ImageBridgeChild::ShutDown();
+  // Nur den ImageBridgeChild abzuraeumen genuegt nicht: der WebRender-
+  // Renderthread laeuft dann weiter, waehrend der Prozess abgebaut wird, und
+  // stirbt beim Sprung auf schon entladenen Code (SIGSEGV in Thread
+  // "Renderer", Adresse in keiner geladenen Bibliothek). Gecko wertet den
+  // Absturz beim naechsten Start als Grafikfehler und schreibt
+  // layers.acceleration.disabled=true ins Profil - danach laeuft alles in
+  // Software. ShutdownLayersIPC() raeumt die ganze Kette in der richtigen
+  // Reihenfolge ab, ImageBridgeChild eingeschlossen.
+  gfxPlatform::ShutdownLayersIPC();
   SendReadyToShutdown();
   return IPC_OK();
 }
