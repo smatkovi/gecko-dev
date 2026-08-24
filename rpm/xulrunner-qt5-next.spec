@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    5
+Release:    6
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -598,8 +598,14 @@ touch /var/lib/_MOZEMBED_CACHE_CLEAN_
 # FEATURE_FAILURE_COMP_PREF und WebRender laeuft in Software). Einmalig
 # entfernen, damit die Voreinstellung aus embedding.js greifen kann; wer den
 # Wert bewusst braucht, kann ihn danach wieder setzen.
-for prefsjs in /home/*/.local/share/org.sailfishos/browser-next153/.mozilla/prefs.js; do
-  [ -f "$prefsjs" ] && sed -i '/layers\.acceleration\.disabled/d' "$prefsjs" || true
+for moz in /home/*/.local/share/org.sailfishos/browser-next153/.mozilla; do
+  [ -d "$moz" ] || continue
+  # prefs.js schreibt ein laufender Browser beim Beenden neu, deshalb zusaetzlich
+  # in user.js verankern - die liest Gecko bei jedem Start und fasst sie nie an.
+  sed -i '/layers\.acceleration\.disabled/d' "$moz/prefs.js" 2>/dev/null || true
+  sed -i '/layers\.acceleration\.disabled/d' "$moz/user.js" 2>/dev/null || true
+  echo 'user_pref("layers.acceleration.disabled", false);' >> "$moz/user.js" || true
+  chown --reference="$moz" "$moz/user.js" 2>/dev/null || true
 done
 
 %files
@@ -629,6 +635,20 @@ done
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Sun Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-6
+- Hardware compositing, at last: the EGL compositor was never even entered,
+  because only the GTK backend ever called gfxVars::SetUseEGL, so
+  RenderCompositorEGL::Create() bailed out on its first line
+- Prefer GLES, since Adreno has no desktop GL and Gecko tried that first
+- Rotate two offscreen surfaces and report a buffer age counted in published
+  frames, keyed on a stable surface id; enable partial present, without which
+  WebRender ignores the age entirely
+- Scrolling: worst frame time drops from 199.8 ms to 17.3 ms, and none of 400
+  frames takes longer than 32 ms (there were two before)
+- Drop a stale layers.acceleration.disabled=true from existing profiles - with
+  it set, WebRender silently falls back to software and none of the above
+  makes any difference
+
 * Sun Aug 23 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-4
 - Going back no longer crashes: the traversable unload check assumed a content process
 
