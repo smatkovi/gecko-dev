@@ -281,6 +281,17 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
   // FrontBuffer an den Konsumenten geht - Punkte-Muster = fehlende Fence.
   context->fFinish();
   std::shared_ptr<SharedSurface> frontBuffer = screen->FrontBuffer();
+
+  // Fence auf genau der Surface, die der Konsument (Browser-Renderpfad) gleich
+  // ueber WithPlatformImage bekommt: dort wartet ProducerReadAcquire() darauf.
+  // Frueher lag die Fence auf dem Back-Buffer - nach PublishFrame ist das eine
+  // andere Surface, deshalb war sie wirkungslos.
+  if (frontBuffer) {
+    if (!frontBuffer->IsProducerAcquired()) {
+      frontBuffer->ProducerAcquire();
+    }
+    frontBuffer->ProducerRelease();
+  }
   MutexAutoLock lock(mRenderMutex);
   if (context != mGLContext || generation != mPlatformImageGeneration) {
     LOGT("EL-P3 generation/ctx race this=%p", this);

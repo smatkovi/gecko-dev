@@ -482,7 +482,14 @@ pref("layout.css.nesting.enabled", true);
 // Enable CSS has() selectors - comes standard in 121+
 pref("layout.css.has-selector.enabled", true);
 
-// Surface-Fabrik: jeder Frame ein neues FBO - Picture-Cache darf nie
-// Vorframe-Inhalt annehmen, sonst zeichnen APZ-Composites (Touch) nur
-// Dirty-Tiles in leere Buffer (68-88% Schwarz bei Beruehrung).
-pref("gfx.webrender.debug.force-picture-invalidation", true);
+// Partial Present braucht diesen Wert > 0; ausserhalb Windows/Android/GTK ist
+// er 0 und schaltet damit auch die Buffer-Age-Auswertung ab.
+// Adreno ist GLES-only; ohne das versucht Gecko Desktop-GL (EGL_BAD_ATTRIBUTE).
+// Ohne Hardware-Compositing faellt WebRender auf Software zurueck und der
+// EGL-Compositor wird nie betreten (about:support: FEATURE_FAILURE_COMP_PREF).
+pref("layers.acceleration.disabled", false);
+pref("gfx.egl.prefer-gles.enabled", true);
+pref("gfx.webrender.max-partial-present-rects", 3);
+// Picture Caching traegt jetzt: rotierender Surface-Pool, echtes Buffer-Age
+// (SwapChain::MarkFramePublished) und Partial Present. Kein Erzwingen mehr.
+pref("gfx.webrender.debug.force-picture-invalidation", false);
