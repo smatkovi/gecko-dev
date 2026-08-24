@@ -89,6 +89,20 @@ EmbedLiteCompositorBridgeParent::~EmbedLiteCompositorBridgeParent()
 {
   LOGT("EmbedLiteCompositorBridgeParent::~EmbedLiteCompositorBridgeParent this=%p", this);
   LiveCompositors().RemoveElement(this);
+
+  // Den Front-Buffer freigeben, solange der GL-Kontext noch lebt.
+  // Ohne das laeuft der shared_ptr erst beim Zerstoeren des Objekts aus,
+  // also nachdem der Kontext weg ist - der Treiber greift dann auf eine
+  // zerstoerte Surface zu, was auf aelteren GPUs (Adreno 510) zum Segfault
+  // beim Beenden fuehrt. Gecko wertet das als Grafikproblem und schreibt
+  // layers.acceleration.disabled=true ins Profil.
+  {
+    MutexAutoLock imageLock(mPlatformImageMutex);
+    MutexAutoLock lock(mRenderMutex);
+    mFrontBuffer.reset();
+    ++mPlatformImageGeneration;
+  }
+
   // Registrierung zuruecknehmen - sonst zeigt der WindowParent auf einen
   // toten Compositor und WithPlatformImage liefert ewig fb=0.
   if (EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId)) {
