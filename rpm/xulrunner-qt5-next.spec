@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    6
+Release:    7
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -635,6 +635,12 @@ done
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Sun Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-7
+- Block autoplay with sound by default - media.autoplay.default was never set,
+  so Gecko allowed everything. 1 is what Firefox uses: audible autoplay is
+  blocked, muted video still plays, and the per-site "autoplay-media"
+  permission is the exception
+
 * Sun Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-6
 - Hardware compositing, at last: the EGL compositor was never even entered,
   because only the GTK backend ever called gfxVars::SetUseEGL, so

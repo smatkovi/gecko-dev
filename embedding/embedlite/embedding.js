@@ -488,6 +488,11 @@ pref("layout.css.has-selector.enabled", true);
 // Ohne Hardware-Compositing faellt WebRender auf Software zurueck und der
 // EGL-Compositor wird nie betreten (about:support: FEATURE_FAILURE_COMP_PREF).
 pref("layers.acceleration.disabled", false);
+
+// Autoplay: 1 blockiert Ton (Firefox-Standard, stumme Videos laufen weiter),
+// 5 blockiert alles. Die Berechtigung "autoplay-media" pro Seite ist die
+// Ausnahme davon.
+pref("media.autoplay.default", 1);
 pref("gfx.egl.prefer-gles.enabled", true);
 pref("gfx.webrender.max-partial-present-rects", 3);
 // Picture Caching traegt jetzt: rotierender Surface-Pool, echtes Buffer-Age
