@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    4
+Release:    5
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -593,6 +593,14 @@ find "%{buildroot}%{_includedir}" -type f -name '*.h' -exec chmod 0644 {} +;
 
 %post
 touch /var/lib/_MOZEMBED_CACHE_CLEAN_
+# 153.2.0-5: layers.acceleration.disabled=true in einem gespeicherten Profil
+# schaltet Hardware-Compositing komplett ab (about:support meldet dann
+# FEATURE_FAILURE_COMP_PREF und WebRender laeuft in Software). Einmalig
+# entfernen, damit die Voreinstellung aus embedding.js greifen kann; wer den
+# Wert bewusst braucht, kann ihn danach wieder setzen.
+for prefsjs in /home/*/.local/share/org.sailfishos/browser-next153/.mozilla/prefs.js; do
+  [ -f "$prefsjs" ] && sed -i '/layers\.acceleration\.disabled/d' "$prefsjs" || true
+done
 
 %files
 %dir %{mozappdir}
