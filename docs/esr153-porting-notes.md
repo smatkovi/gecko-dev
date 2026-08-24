@@ -161,3 +161,35 @@ So EGL + buffer age is already as good as software and runs on the GPU. Picture 
 on top is clearly the fastest (max drops to 34ms) but still paints stale tiles, because
 RenderCompositorEGL::SetBufferDamageRegion() returns early for mUseEmbedLiteOffscreen —
 WebRender's damage rects are thrown away. That is the next patch.
+
+### 24 Aug: the hardware compositor works — and why it took two days
+Everything below was already correct on the evening of the 23rd, but none of it
+had any effect, because the profile contained
+`user_pref("layers.acceleration.disabled", true)` — left over from an earlier
+experiment. With it, about:support reports FEATURE_FAILURE_COMP_PREF ->
+OPENGL_COMPOSITING unavailable -> WEBRENDER unavailable, and Gecko silently uses
+software WebRender. RenderCompositorEGL is then never constructed, so pool size,
+buffer age, fences and partial present are all dead code. Check
+`Compositing:` in about:support before believing any compositor measurement.
+
+What actually makes it work, in order of discovery:
+1. gfxVars::SetUseEGL(true) for MOZ_EMBEDLITE (only the GTK backend set it).
+2. gfx.egl.prefer-gles.enabled — Adreno is GLES-only, Gecko tries desktop GL
+   first off Android and fails with EGL_BAD_ATTRIBUTE.
+3. A pool of two surfaces (mPoolLimit) so there is something to rotate.
+4. Buffer age counted in *published frames*, not Acquire() calls, keyed on a
+   stable per-surface id (freed surfaces get reallocated at the same address).
+5. Partial present enabled — WebRender ignores the age otherwise
+   ("only relevant if partial present is active", renderer/mod.rs).
+6. RequestFullRender() only when the target surface changed.
+7. ProducerRelease() on the *front* buffer in the bridge, so the fence belongs
+   to the surface the consumer waits on.
+
+scroll2.html, 20s of scrolling, Xperia 10 V:
+  software WebRender:  med 16.3  p95 17.3  max 199.8  2/400 over 32ms
+  hardware, all of the above: med 16.3  p95 17.2  max 17.3  0/400
+
+Also worth writing down: the browser draws the web content itself, in
+DeclarativeWebContainer::renderCompositedFrame() (sailfish-browser), not through
+QuickMozView::updatePaintNode(). Hours went into instrumenting the qtmozembed
+scene graph path before noticing it is never called.
