@@ -508,6 +508,14 @@ EmbedLiteViewParent::ViewAPIDestroyed()
   if (mContentController) {
     mContentController->ClearRenderFrame();
   }
+  // Tell the listener before cutting the connection: from here on
+  // RecvDestroyed() drops every message because of mViewAPIDestroyed, so
+  // QMozViewPrivate::ViewDestroyed() - which clears its own mView - is never
+  // reached. The embedder is left holding a pointer to a deleted view and
+  // crashes the next time it touches it (suspendView on shutdown).
+  if (mView && mView->GetListener()) {
+    mView->GetListener()->ViewDestroyed();
+  }
   mViewAPIDestroyed = true;
   mView = nullptr;
 
