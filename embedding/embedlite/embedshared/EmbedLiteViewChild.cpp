@@ -226,6 +226,10 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
   // If this is created with window.open() or otherwise via WindowCreator
   // we'll receive parent BrowsingContext as an argument.
   // Create a BrowsingContext for our windowless browser.
+  // The message manager group has to be "browsers": ExtensionPolicyService
+  // checks it in IsTabOrExtensionBrowser before it will run content scripts or
+  // initialise extension documents, and an empty group fails that check - so
+  // extensions loaded but could never touch a page.
   RefPtr<BrowsingContext> browsingContext = BrowsingContext::CreateDetached(
       nullptr, parentBrowsingContext, nullptr, EmptyString(),
       BrowsingContext::Type::Content,
@@ -236,6 +240,7 @@ EmbedLiteViewChild::InitGeckoWindow(const uint32_t parentId,
           .topLevelCreatedByWebContent = !!parentBrowsingContext});
   browsingContext->SetUsePrivateBrowsing(isPrivateWindow); // Needs to be called before attaching
   browsingContext->EnsureAttached();
+  browsingContext->SetMessageManagerGroup(u"browsers"_ns);
   browsingContext->InitSessionHistory();
 
   CanonicalBrowsingContext *canonicalBrowsingContext = browsingContext->Canonical();
