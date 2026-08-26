@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    10
+Release:    11
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -635,6 +635,13 @@ done
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Wed Aug 26 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-11
+- Register a DevTools starter in the embedlite-startup category, so the server
+  that already ships in omni.ja can be reached from a desktop Firefox
+  (about:debugging, network location <device>:6000). Off unless
+  embedlite.devtools.enabled is set.
+- Register an AddonManager starter the same way, behind embedlite.addons.enabled
+
 * Tue Aug 25 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-10
 - Release the EGL context before destroying it; eglDestroyContext on a current
   context makes the Adreno driver unbind it from the inside, on an object that
