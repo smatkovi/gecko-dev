@@ -49,7 +49,7 @@
 Name:       xulrunner-qt5-next153
 Summary:    XUL runner
 Version:    %{greversion}
-Release:    11
+Release:    12
 License:    MPLv2.0
 URL:        https://github.com/sailfishos/gecko-dev
 Source0:    %{name}-%{version}.tar.bz2
@@ -635,6 +635,12 @@ done
 %exclude %{mozappdir}/platform.ini
 
 %changelog
+* Thu Aug 27 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - %{greversion}-12
+- Enable extensions by default (embedlite.addons.enabled). Without a default
+  the AddonManager never started, so a fresh profile had no working
+  extensions at all and installing one appeared to do nothing.
+- Give the remote debugging prefs explicit defaults, off unless asked for.
+
 * Wed Aug 26 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-11
 - Register a DevTools starter in the embedlite-startup category, so the server
   that already ships in omni.ja can be reached from a desktop Firefox
@@ -669,13 +675,13 @@ done
   The fix resets mFrontBuffer under both mutexes at the top of the destructor,
   before the window-parent registration is removed.
 
-* Sun Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-7
+* Mon Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-7
 - Block autoplay with sound by default - media.autoplay.default was never set,
   so Gecko allowed everything. 1 is what Firefox uses: audible autoplay is
   blocked, muted video still plays, and the per-site "autoplay-media"
   permission is the exception
 
-* Sun Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-6
+* Mon Aug 24 2026 Sebastian Matkovich <sebastianmatkovich@gmail.com> - 153.2.0-6
 - Hardware compositing, at last: the EGL compositor was never even entered,
   because only the GTK backend ever called gfxVars::SetUseEGL, so
   RenderCompositorEGL::Create() bailed out on its first line
