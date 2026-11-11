@@ -1,0 +1,479 @@
+From 4f716b2a20b03c8765aece3db3d2c03fd667dcbc Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 14:43:14 +0100
+Subject: [PATCH 160/160] webrender: ES 2.0 integer attributes, textures and
+ copies
+
+On an OpenGL ES 2.0 context:
+- integer vertex attributes are read without a copy as the unsigned
+  16-bit halves of each 32-bit value (two values per vec4,
+  <name>_lh0/_lh1), which the GLSL ES 1.00 rewrite declares and joins
+  with wr_i32(); a 16-bit attribute fills the low half,
+- textures are allocated with glTexImage2D in unsized formats (BGRA
+  through EXT_texture_format_BGRA8888, R8/RG8 through EXT_texture_rg,
+  float through OES_texture_float, which also holds the 32-bit integer
+  data, converted on upload), without texture swizzle,
+- uploads are immediate (no pixel buffer objects, no row length: rows
+  are packed on the CPU),
+- a blit of the same size into a texture is glCopyTexSubImage2D.
+
+wrench reftests/blend/multiply.yaml passes in a strict ES 2.0 context
+(Mesa, instancing extensions hidden, every GL error fatal).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/base.glsl       |   8 +
+ gfx/wr/webrender/src/device/gl.rs    | 227 ++++++++++++++++++++++++---
+ gfx/wr/webrender_build/src/shader.rs |  43 +++--
+ 3 files changed, 246 insertions(+), 32 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/base.glsl b/gfx/wr/webrender/res/base.glsl
+index f8d9f14f3512..4d64a6d213d4 100644
+--- a/gfx/wr/webrender/res/base.glsl
++++ b/gfx/wr/webrender/res/base.glsl
+@@ -155,4 +155,12 @@
+     vec2 wr_round(vec2 x) { return floor(x + 0.5); }
+     vec3 wr_round(vec3 x) { return floor(x + 0.5); }
+     vec4 wr_round(vec4 x) { return floor(x + 0.5); }
++
++    #ifdef WR_VERTEX_SHADER
++    // An integer attribute arrives as the unsigned 16-bit halves (low, high)
++    // of each 32-bit value.
++    highp float wr_i32(highp vec2 lh) {
++        return (lh.y >= 32768.0 ? lh.y - 65536.0 : lh.y) * 65536.0 + lh.x;
++    }
++    #endif
+ #endif
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index e93b3488febe..b5fb4d230f6b 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -313,6 +313,31 @@ impl VertexAttribute {
+         self.count * self.kind.size_in_bytes()
+     }
+ 
++    fn is_integer(&self) -> bool {
++        matches!(self.kind, VertexAttributeKind::I32 | VertexAttributeKind::U16)
++    }
++
++    /// The attribute as an OpenGL ES 2.0 context reads it: name, component
++    /// count and byte offset of each part. Integers come as the unsigned
++    /// 16-bit halves of their 32-bit values, two values per part, as
++    /// webrender_build declares them (`<name>_lh0`, `<name>_lh1`); a 16-bit
++    /// value fills only the low half.
++    fn gles2_parts(&self) -> Vec<(String, gl::GLint, gl::GLuint)> {
++        match self.kind {
++            VertexAttributeKind::I32 => {
++                let halves = 2 * self.count;
++                (0 .. (halves + 3) / 4)
++                    .map(|k| (format!("{}_lh{}", self.name, k), (halves - 4 * k).min(4) as gl::GLint, 8 * k))
++                    .collect()
++            }
++            VertexAttributeKind::U16 => {
++                debug_assert_eq!(self.count, 1);
++                vec![(format!("{}_lh0", self.name), 1, 0)]
++            }
++            _ => vec![(self.name.to_string(), self.count as gl::GLint, 0)],
++        }
++    }
++
+     fn bind_to_vao(
+         &self,
+         attr_index: gl::GLuint,
+@@ -393,7 +418,8 @@ impl VertexDescriptor {
+         divisor: u32,
+         gl: &dyn gl::Gl,
+         vbo: VBOId,
+-    ) {
++        gles2: bool,
++    ) -> usize {
+         vbo.bind(gl);
+ 
+         let stride: u32 = attributes
+@@ -402,23 +428,44 @@ impl VertexDescriptor {
+             .sum();
+ 
+         let mut offset = 0;
+-        for (i, attr) in attributes.iter().enumerate() {
+-            let attr_index = (start_index + i) as gl::GLuint;
+-            attr.bind_to_vao(attr_index, divisor, stride as _, offset, gl);
++        let mut attr_index = start_index as gl::GLuint;
++        for attr in attributes.iter() {
++            if gles2 && attr.is_integer() {
++                for (_, size, part_offset) in attr.gles2_parts() {
++                    gl.enable_vertex_attrib_array(attr_index);
++                    if divisor != 0 {
++                        gl.vertex_attrib_divisor(attr_index, divisor);
++                    }
++                    gl.vertex_attrib_pointer(
++                        attr_index,
++                        size,
++                        gl::UNSIGNED_SHORT,
++                        false,
++                        stride as _,
++                        offset + part_offset,
++                    );
++                    attr_index += 1;
++                }
++            } else {
++                attr.bind_to_vao(attr_index, divisor, stride as _, offset, gl);
++                attr_index += 1;
++            }
+             offset += attr.size_in_bytes();
+         }
++        attr_index as usize
+     }
+ 
+-    fn bind(&self, gl: &dyn gl::Gl, main: VBOId, instance: VBOId, instance_divisor: u32) {
+-        Self::bind_attributes(self.vertex_attributes, 0, 0, gl, main);
++    fn bind(&self, gl: &dyn gl::Gl, main: VBOId, instance: VBOId, instance_divisor: u32, gles2: bool) {
++        let next_index = Self::bind_attributes(self.vertex_attributes, 0, 0, gl, main, gles2);
+ 
+         if !self.instance_attributes.is_empty() {
+             Self::bind_attributes(
+                 self.instance_attributes,
+-                self.vertex_attributes.len(),
++                next_index,
+                 instance_divisor,
+                 gl,
+                 instance,
++                gles2,
+             );
+         }
+     }
+@@ -1712,10 +1759,26 @@ impl Device {
+                 // see https://www.g-truc.net/post-0734.html
+                 gl::GlType::Gl => gl_version >= [3, 3] ||
+                     supports_extension(&extensions, "GL_ARB_texture_swizzle"),
+-                gl::GlType::Gles => true,
++                gl::GlType::Gles => !is_gles2,
+             };
+ 
+         let (color_formats, bgra_formats, bgra_pixel_type, bgra8_sampling_swizzle, texture_storage_usage) = match gl.get_type() {
++            // ES 2.0: glTexImage only, with the internal format equal to the
++            // external one; BGRA through GL_EXT_texture_format_BGRA8888.
++            gl::GlType::Gles if is_gles2 && supports_gles_bgra => (
++                TextureFormatPair::from(ImageFormat::BGRA8),
++                TextureFormatPair::from(gl::BGRA_EXT),
++                gl::UNSIGNED_BYTE,
++                Swizzle::Rgba,
++                TexStorageUsage::Never,
++            ),
++            gl::GlType::Gles if is_gles2 => (
++                TextureFormatPair::from(ImageFormat::RGBA8),
++                TextureFormatPair::from(gl::RGBA),
++                gl::UNSIGNED_BYTE,
++                Swizzle::Rgba,
++                TexStorageUsage::Never,
++            ),
+             // There is `glTexStorage`, use it and expect RGBA on the input.
+             gl::GlType::Gl if supports_texture_storage && supports_texture_swizzle => (
+                 TextureFormatPair::from(ImageFormat::RGBA8),
+@@ -1778,7 +1841,7 @@ impl Device {
+         };
+ 
+         let is_software_webrender = renderer_name.starts_with("Software WebRender");
+-        let upload_method = if is_software_webrender {
++        let upload_method = if is_software_webrender || is_gles2 {
+             // Uploads in SWGL generally reduce to simple memory copies.
+             UploadMethod::Immediate
+         } else {
+@@ -2113,7 +2176,7 @@ impl Device {
+     pub fn set_parameter(&mut self, param: &Parameter) {
+         match param {
+             Parameter::Bool(BoolParameter::PboUploads, enabled) => {
+-                if !self.is_software_webrender {
++                if !self.is_software_webrender && !self.capabilities.is_gles2 {
+                     self.upload_method = if *enabled {
+                         UploadMethod::PixelBuffer(crate::ONE_TIME_USAGE_HINT)
+                     } else {
+@@ -2352,7 +2415,9 @@ impl Device {
+ 
+         // Pixel op state
+         self.gl.pixel_store_i(gl::UNPACK_ALIGNMENT, 1);
+-        self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        if !self.capabilities.is_gles2 {
++            self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        }
+ 
+         // Default is sampler 0, always
+         self.gl.active_texture(gl::TEXTURE0);
+@@ -2660,14 +2725,21 @@ impl Device {
+             self.gl.attach_shader(program.id, fs_id);
+ 
+             // Bind vertex attributes
+-            for (i, attr) in descriptor
++            let mut attr_index = 0;
++            for attr in descriptor
+                 .vertex_attributes
+                 .iter()
+                 .chain(descriptor.instance_attributes.iter())
+-                .enumerate()
+             {
+-                self.gl
+-                    .bind_attrib_location(program.id, i as gl::GLuint, attr.name);
++                if self.capabilities.is_gles2 && attr.is_integer() {
++                    for (name, _, _) in attr.gles2_parts() {
++                        self.gl.bind_attrib_location(program.id, attr_index, &name);
++                        attr_index += 1;
++                    }
++                } else {
++                    self.gl.bind_attrib_location(program.id, attr_index, attr.name);
++                    attr_index += 1;
++                }
+             }
+ 
+             if self.cached_programs.is_some() {
+@@ -2789,7 +2861,9 @@ impl Device {
+         };
+ 
+         // We never want to upload texture data at the same time as allocating the texture.
+-        self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        if !self.capabilities.is_gles2 {
++            self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        }
+ 
+         // Use glTexStorage where available, since it avoids allocating
+         // unnecessary mipmap storage and generally improves performance with
+@@ -3115,6 +3189,11 @@ impl Device {
+     ) {
+         debug_assert!(self.inside_frame);
+ 
++        if self.capabilities.is_gles2 {
++            self.blit_render_target_gles2(src_target, src_rect, dest_target, dest_rect);
++            return;
++        }
++
+         self.bind_read_target(src_target);
+ 
+         self.bind_draw_target(dest_target);
+@@ -3122,6 +3201,38 @@ impl Device {
+         self.blit_render_target_impl(src_rect, dest_rect, filter);
+     }
+ 
++    /// ES 2.0 has no glBlitFramebuffer. A copy of the same size into a
++    /// texture is glCopyTexSubImage2D from the read framebuffer.
++    fn blit_render_target_gles2(
++        &mut self,
++        src_target: ReadTarget,
++        src_rect: FramebufferIntRect,
++        dest_target: DrawTarget,
++        dest_rect: FramebufferIntRect,
++    ) {
++        self.bind_read_target(src_target);
++        let src_x0 = src_rect.min.x + self.bound_read_fbo.1.x;
++        let src_y0 = src_rect.min.y + self.bound_read_fbo.1.y;
++        match dest_target {
++            DrawTarget::Texture { id, target, .. } if src_rect.size() == dest_rect.size() => {
++                self.bind_texture_impl(DEFAULT_TEXTURE, id, target, None, None);
++                self.gl.copy_tex_sub_image_2d(
++                    target,
++                    0,
++                    dest_rect.min.x,
++                    dest_rect.min.y,
++                    src_x0,
++                    src_y0,
++                    src_rect.width(),
++                    src_rect.height(),
++                );
++            }
++            _ => {
++                warn!("OpenGL ES 2.0: no blit from {:?} to {:?}", src_rect, dest_rect);
++            }
++        }
++    }
++
+     /// Performs a blit while flipping vertically. Useful for blitting textures
+     /// (which use origin-bottom-left) to the main framebuffer (which uses
+     /// origin-top-left).
+@@ -3557,7 +3668,7 @@ impl Device {
+ 
+         self.bind_vao_impl(vao_id);
+ 
+-        descriptor.bind(self.gl(), main_vbo_id, instance_vbo_id, instance_divisor);
++        descriptor.bind(self.gl(), main_vbo_id, instance_vbo_id, instance_divisor, self.capabilities.is_gles2);
+         ibo_id.bind(self.gl()); // force it to be a part of VAO
+ 
+         VAO {
+@@ -3582,14 +3693,14 @@ impl Device {
+ 
+         let mut attrib_index = 0;
+         for stream in streams {
+-            VertexDescriptor::bind_attributes(
++            attrib_index = VertexDescriptor::bind_attributes(
+                 stream.attributes,
+                 attrib_index,
+                 0,
+                 self.gl(),
+                 stream.vbo,
++                self.capabilities.is_gles2,
+             );
+-            attrib_index += stream.attributes.len();
+         }
+ 
+         CustomVAO {
+@@ -4230,6 +4341,9 @@ impl Device {
+     }
+ 
+     pub fn gl_describe_format(&self, format: ImageFormat) -> FormatDesc {
++        if self.capabilities.is_gles2 {
++            return self.gl_describe_format_gles2(format);
++        }
+         match format {
+             ImageFormat::R8 => FormatDesc {
+                 internal: gl::R8,
+@@ -4286,6 +4400,27 @@ impl Device {
+         }
+     }
+ 
++    /// ES 2.0 formats are unsized, internal equal to external; R8 and RG8
++    /// through GL_EXT_texture_rg, float textures through
++    /// GL_OES_texture_float, which also hold the 32-bit integer data.
++    fn gl_describe_format_gles2(&self, format: ImageFormat) -> FormatDesc {
++        let (internal, pixel_type) = match format {
++            ImageFormat::R8 => (gl::RED, gl::UNSIGNED_BYTE),
++            ImageFormat::R16 => (gl::RED, gl::UNSIGNED_SHORT),
++            ImageFormat::RG8 => (gl::RG, gl::UNSIGNED_BYTE),
++            ImageFormat::RG16 => (gl::RG, gl::UNSIGNED_SHORT),
++            ImageFormat::BGRA8 => (self.bgra_formats.internal, gl::UNSIGNED_BYTE),
++            ImageFormat::RGBA8 => (gl::RGBA, gl::UNSIGNED_BYTE),
++            ImageFormat::RGBAF32 | ImageFormat::RGBAI32 => (gl::RGBA, gl::FLOAT),
++        };
++        FormatDesc {
++            internal,
++            external: internal,
++            read: internal,
++            pixel_type,
++        }
++    }
++
+     /// Generates a memory report for the resources managed by the device layer.
+     pub fn report_memory(&self, size_op_funs: &MallocSizeOfOps, swgl: *mut c_void) -> MemoryReport {
+         let mut report = MemoryReport::default();
+@@ -4914,6 +5049,10 @@ impl<'a> TextureUploader<'a> {
+     fn update_impl(device: &mut Device, chunk: UploadChunk) {
+         device.bind_texture(DEFAULT_TEXTURE, chunk.texture, Swizzle::default());
+ 
++        if device.capabilities.is_gles2 {
++            return Self::update_impl_gles2(device, chunk);
++        }
++
+         let format = chunk.format_override.unwrap_or(chunk.texture.format);
+         let (gl_format, bpp, data_type) = match format {
+             ImageFormat::R8 => (gl::RED, 1, gl::UNSIGNED_BYTE),
+@@ -4970,6 +5109,56 @@ impl<'a> TextureUploader<'a> {
+     }
+ }
+ 
++impl<'a> TextureUploader<'a> {
++    /// ES 2.0 has no GL_UNPACK_ROW_LENGTH and no integer textures: rows are
++    /// packed and 32-bit integers converted to floats on the CPU. Uploads
++    /// are immediate, so the chunk's offset is the data's address.
++    fn update_impl_gles2(device: &mut Device, chunk: UploadChunk) {
++        let format = chunk.format_override.unwrap_or(chunk.texture.format);
++        let desc = device.gl_describe_format(format);
++        let size = chunk.rect.size();
++        if size.width <= 0 || size.height <= 0 {
++            return;
++        }
++        let row = size.width as usize * format.bytes_per_pixel() as usize;
++        let src_stride = chunk.stride.map_or(row, |stride| stride as usize);
++        let rows = size.height as usize;
++        let src = unsafe {
++            slice::from_raw_parts(chunk.offset as *const u8, (rows - 1) * src_stride + row)
++        };
++        let packed: Vec<u8>;
++        let data = if format == ImageFormat::RGBAI32 {
++            packed = (0 .. rows)
++                .flat_map(|y| src[y * src_stride .. y * src_stride + row].chunks_exact(4))
++                .flat_map(|v| (i32::from_ne_bytes([v[0], v[1], v[2], v[3]]) as f32).to_ne_bytes())
++                .collect();
++            &packed[..]
++        } else if src_stride != row {
++            packed = (0 .. rows)
++                .flat_map(|y| src[y * src_stride .. y * src_stride + row].iter().cloned())
++                .collect();
++            &packed[..]
++        } else {
++            src
++        };
++        let pos = chunk.rect.min;
++        device.gl.tex_sub_image_2d(
++            chunk.texture.target,
++            0,
++            pos.x as _,
++            pos.y as _,
++            size.width as _,
++            size.height as _,
++            desc.external,
++            desc.pixel_type,
++            data,
++        );
++        if chunk.texture.filter == TextureFilter::Trilinear {
++            device.gl.generate_mipmap(chunk.texture.target);
++        }
++    }
++}
++
+ fn texels_to_u8_slice<T: Texel>(texels: &[T]) -> &[u8] {
+     unsafe {
+         slice::from_raw_parts(texels.as_ptr() as *const u8, texels.len() * mem::size_of::<T>())
+diff --git a/gfx/wr/webrender_build/src/shader.rs b/gfx/wr/webrender_build/src/shader.rs
+index 7946e06fca9e..bacbdbbf2420 100644
+--- a/gfx/wr/webrender_build/src/shader.rs
++++ b/gfx/wr/webrender_build/src/shader.rs
+@@ -339,21 +339,38 @@ pub fn rewrite_for_gles2(line: &str) -> String {
+     {
+         let mut parts = attr.trim_end_matches(';').split_whitespace();
+         if let (Some(ty), Some(name)) = (parts.next(), parts.next()) {
+-            let float_ty = match ty {
+-                "int" | "uint" => Some("float"),
+-                "ivec2" | "uvec2" => Some("vec2"),
+-                "ivec3" | "uvec3" => Some("vec3"),
+-                "ivec4" | "uvec4" => Some("vec4"),
+-                _ => None,
++            let count = match ty {
++                "int" | "uint" => 1,
++                "ivec2" | "uvec2" => 2,
++                "ivec3" | "uvec3" => 3,
++                "ivec4" | "uvec4" => 4,
++                _ => 0,
+             };
+-            if let Some(float_ty) = float_ty {
+-                let int_ty = match float_ty {
+-                    "float" => "int".to_string(),
+-                    vec => format!("i{}", vec),
+-                };
++            if count > 0 {
++                // The device binds each 32-bit value as two unsigned 16-bit
++                // halves, two values per attribute: <name>_lh0, <name>_lh1.
++                let mut decls = Vec::new();
++                let mut values = Vec::new();
++                for k in 0 .. (count + 1) / 2 {
++                    let halves = (2 * count - 4 * k).min(4);
++                    let lh = format!("{}_lh{}", name, k);
++                    decls.push(format!(
++                        "attribute highp {} {};",
++                        if halves == 4 { "vec4" } else { "vec2" },
++                        lh
++                    ));
++                    values.push(format!("wr_i32({}.xy)", lh));
++                    if halves == 4 {
++                        values.push(format!("wr_i32({}.zw)", lh));
++                    }
++                }
++                let int_ty = if count == 1 { "int".to_string() } else { format!("ivec{}", count) };
+                 out = format!(
+-                    "attribute {} {}_f;\n#define {} {}({}_f)",
+-                    float_ty, name, name, int_ty, name
++                    "{}\n#define {} {}({})",
++                    decls.join("\n"),
++                    name,
++                    int_ty,
++                    values.join(", ")
+                 );
+             }
+         }
+-- 
+2.56.0
+
