@@ -1,0 +1,131 @@
+From 55d55406e374bf0d6d3532620ad8d22d71f3cb77 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:23:12 +0100
+Subject: [PATCH] webrender: ES 2.0 brush_blend within 8 varying vectors
+
+On ES 2.0 the color matrix and offset (16 + 4 components) are not passed:
+the fragment shader calls SetupFilterParams itself from the blend op,
+amount and GPU data address, which travel in one vector with the
+perspective flag (44 -> 24 components).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/blend.glsl       |  4 ++-
+ gfx/wr/webrender/res/brush_blend.glsl | 38 +++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/wr/webrender/res/blend.glsl b/gfx/wr/webrender/res/blend.glsl
+index 9778cf1a26e0..23c8db4ef3cd 100644
+--- a/gfx/wr/webrender/res/blend.glsl
++++ b/gfx/wr/webrender/res/blend.glsl
+@@ -25,7 +25,9 @@
+ #define FILTER_FLOOD               10
+ #define FILTER_COMPONENT_TRANSFER  11
+ 
+-#ifdef WR_VERTEX_SHADER
++#if defined(WR_VERTEX_SHADER) || __VERSION__ == 100
++// ES 2.0: brush_blend's fragment shader calls this (its parameters would
++// not fit the PowerVR SGX530's 8 varying vectors).
+ void SetupFilterParams(
+     int op,
+     float amount,
+diff --git a/gfx/wr/webrender/res/brush_blend.glsl b/gfx/wr/webrender/res/brush_blend.glsl
+index cb8c0384c95e..31269c2259a3 100644
+--- a/gfx/wr/webrender/res/brush_blend.glsl
++++ b/gfx/wr/webrender/res/brush_blend.glsl
+@@ -14,6 +14,14 @@ varying highp vec2 v_uv;
+ // sampling artifacts.
+ flat varying highp vec4 v_uv_sample_bounds;
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, 44 components otherwise): the
++// fragment shader derives the color matrix and offset (SetupFilterParams).
++// x: perspective flag, y: amount, z: blend op, w: GPU data address
++flat varying highp vec4 v_filter_params;
++#define v_perspective v_filter_params.x
++#define v_amount v_filter_params.y
++#else
+ // x: Flag to allow perspective interpolation of UV.
+ // y: Filter-dependent "amount" parameter.
+ // Packed in to a vector to work around bug 1630356.
+@@ -33,11 +41,14 @@ flat varying highp ivec2 v_op_table_address_vec;
+ // We must keep this as highp as we encoutered shader compilation crashes on
+ // Mali-T devices when mediump.
+ flat varying highp mat4 v_color_mat;
++#endif
+ // The function to use for each component of a component transfer filter. Using a int[4]
+ // or ivec4 (with each element or component containing the function for each component) has
+ // ran in to bugs 1695912 and 1731758, so instead use a vec4 and cast the values to/from floats.
+ flat varying mediump vec4 v_funcs;
++#if __VERSION__ != 100
+ flat varying mediump vec4 v_color_offset;
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ void brush_vs(
+@@ -69,7 +80,12 @@ void brush_vs(
+ 
+     float amount = float(prim_user_data.z) / 65536.0;
+ 
++#if __VERSION__ == 100
++    v_filter_params.z = float(WR_BITS(prim_user_data.y, 0, 16));
++    v_filter_params.w = float(prim_user_data.z);
++#else
+     v_op = WR_BITS(prim_user_data.y, 0, 16);
++#endif
+     v_amount = amount;
+ 
+     v_funcs.r = float(WR_BITS(prim_user_data.y, 28, 4));
+@@ -77,6 +93,7 @@ void brush_vs(
+     v_funcs.b = float(WR_BITS(prim_user_data.y, 20, 4));
+     v_funcs.a = float(WR_BITS(prim_user_data.y, 16, 4));
+ 
++#if __VERSION__ != 100
+     SetupFilterParams(
+         v_op,
+         amount,
+@@ -85,6 +102,7 @@ void brush_vs(
+         v_color_mat,
+         v_table_address
+     );
++#endif
+ }
+ #endif
+ 
+@@ -99,6 +117,25 @@ Fragment brush_fs() {
+ 
+     float alpha;
+     vec3 color;
++#if __VERSION__ == 100
++    int op = int(floor(v_filter_params.z + 0.5));
++    highp int data_address = int(floor(v_filter_params.w + 0.5));
++    vec4 color_offset = vec4(0.0);
++    mat4 color_mat = mat4(1.0);
++    highp int table_address = data_address;
++    SetupFilterParams(op, v_amount, data_address, color_offset, color_mat, table_address);
++    CalculateFilter(
++        Cs,
++        op,
++        v_amount,
++        table_address,
++        color_offset,
++        color_mat,
++        v_funcs,
++        color,
++        alpha
++    );
++#else
+     CalculateFilter(
+         Cs,
+         v_op,
+@@ -110,6 +147,7 @@ Fragment brush_fs() {
+         color,
+         alpha
+     );
++#endif
+ 
+     #ifdef WR_FEATURE_ALPHA_PASS
+         alpha *= antialias_brush();
+-- 
+2.56.0
+
