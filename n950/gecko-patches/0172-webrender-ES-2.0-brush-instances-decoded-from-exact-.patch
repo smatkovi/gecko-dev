@@ -1,0 +1,43 @@
+From 891f20d7ba728f3ff52f6301a918b2ddad9aca7b Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 18:54:49 +0100
+Subject: [PATCH] webrender: ES 2.0 brush instances decoded from exact 16-bit
+ halves
+
+aData.z packs the segment (glyph) index with flags up to bit 26 and
+aData.w the 24-bit resource address with a byte above: both exceed what
+a float holds exactly, so text drew every glyph of a run at one spot. On
+ES 2.0 the fields come from the attribute's unsigned 16-bit halves.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/prim_shared.glsl | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/gfx/wr/webrender/res/prim_shared.glsl b/gfx/wr/webrender/res/prim_shared.glsl
+index 6e62a9c9adf6..70732bdec051 100644
+--- a/gfx/wr/webrender/res/prim_shared.glsl
++++ b/gfx/wr/webrender/res/prim_shared.glsl
+@@ -63,10 +63,19 @@ Instance decode_instance_attributes() {
+ 
+     instance.prim_header_address = aData.x;
+     instance.clip_address = aData.y;
++#if __VERSION__ == 100
++    // aData.z and aData.w pack fields beyond what a float holds exactly;
++    // their unsigned 16-bit halves (aData_lh1, see webrender_build) do not.
++    instance.segment_index = int(aData_lh1.x);
++    instance.flags = int(aData_lh1.y);
++    instance.resource_address = int(aData_lh1.z + mod(aData_lh1.w, 256.0) * 65536.0);
++    instance.brush_kind = int(floor(aData_lh1.w / 256.0));
++#else
+     instance.segment_index = WR_BITS(aData.z, 0, 16);
+     instance.flags = WR_SHR(aData.z, 16);
+     instance.resource_address = WR_BITS(aData.w, 0, 24);
+     instance.brush_kind = WR_SHR(aData.w, 24);
++#endif
+ 
+     return instance;
+ }
+-- 
+2.56.0
+
