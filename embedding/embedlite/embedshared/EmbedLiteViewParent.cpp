@@ -107,7 +107,7 @@ EmbedLiteViewParent::UpdateScrollController()
 
   if (mCompositor) {
     if ((mDPI > 0) && GetApzcTreeManager()) {
-      GetApzcTreeManager()->SetDPI(mDPI);
+      GetApzcTreeManager()->InputBridge()->SetDPI(mDPI);
     }
 
     nsWindow *window = GetWindowWidget();
@@ -419,7 +419,7 @@ EmbedLiteViewParent::SetDPI(float dpi)
   mDPI = dpi;
 
   if (GetApzcTreeManager()) {
-    GetApzcTreeManager()->SetDPI(mDPI);
+    GetApzcTreeManager()->InputBridge()->SetDPI(mDPI);
   }
 
   return NS_OK;
