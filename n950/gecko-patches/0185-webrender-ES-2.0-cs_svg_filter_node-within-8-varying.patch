@@ -1,0 +1,164 @@
+From 320042b651c50c5283f88ed2dba02cad3b5aff53 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:40:30 +0100
+Subject: [PATCH] webrender: ES 2.0 cs_svg_filter_node within 8 varying vectors
+
+The input uvs share a vector, and so do the input count with the filter
+kind, vFloat0.x and the GPU buffer uv of the filter's data; the fragment
+shader reads a color matrix from there itself, and the unused vFilterData1
+and vFuncs are not declared. prim_shared's clip mask varyings, which this
+shader does not use, go with WR_NO_CLIP_MASK (58 -> 24 components).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/cs_svg_filter_node.glsl | 51 ++++++++++++++++++++
+ gfx/wr/webrender/res/prim_shared.glsl        |  5 +-
+ 2 files changed, 54 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/cs_svg_filter_node.glsl b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+index ebab63742165..55fd77a30654 100644
+--- a/gfx/wr/webrender/res/cs_svg_filter_node.glsl
++++ b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+@@ -37,9 +37,33 @@ Notes about specific filter kinds:
+ */
+ 
+ #define WR_FEATURE_TEXTURE_2D
++#if __VERSION__ == 100
++// no clip mask here: its varyings would only count against the SGX530's 8
++#define WR_NO_CLIP_MASK
++#endif
+ 
+ #include shared,prim_shared,gpu_buffer
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, 58 components otherwise): the
++// input uvs share a vector, and so do the input count with the filter kind,
++// vFloat0.x and the GPU buffer uv of the filter's data, from which the
++// fragment shader reads a color matrix itself.
++varying highp vec4 v_input_uvs;
++#define vInput1Uv v_input_uvs.xy
++#define vInput2Uv v_input_uvs.zw
++// x: input count + 4 * filter kind, y: vFloat0.x, zw: GPU buffer uv
++flat varying highp vec4 v_params;
++flat varying highp vec4 vInput1UvRect;
++flat varying highp vec4 vInput2UvRect;
++flat varying mediump vec4 vFilterData0;
++#ifdef WR_FRAGMENT_SHADER
++int vFilterInputCount;
++int vFilterKind;
++#define vData ivec4(floor(v_params.zw + 0.5), 0.0, 0.0)
++#define vFloat0 v_params.yz
++#endif
++#else
+ varying highp vec2 vInput1Uv;
+ varying highp vec2 vInput2Uv;
+ flat varying highp vec4 vInput1UvRect;
+@@ -58,6 +82,7 @@ flat varying mediump vec2 vFloat0;
+ 
+ flat varying mediump mat4 vColorMat;
+ flat varying mediump ivec4 vFuncs;
++#endif
+ 
+ // must match add_svg_filter_node_instances in render_target.rs
+ #define FILTER_IDENTITY 0
+@@ -220,8 +245,12 @@ void main(void) {
+         vInput2Uv = compute_uv(input_2_task, aFilterInput2ContentScaleAndOffset, aFilterTargetRect.zw - aFilterTargetRect.xy, texture_size);
+     }
+ 
++#if __VERSION__ == 100
++    v_params = vec4(float(aFilterInputCount + 4 * aFilterKind), 0.0, 0.0, 0.0);
++#else
+     vFilterInputCount = aFilterInputCount;
+     vFilterKind = aFilterKind;
++#endif
+ 
+     {
+         int wr_switch_2 = int(aFilterKind);
+@@ -229,17 +258,29 @@ void main(void) {
+         } else if (wr_switch_2 == (FILTER_OPACITY) || wr_switch_2 == (FILTER_OPACITY_CONVERTSRGB)) {
+             // opacity takes one input and an alpha value, so we just stuffed
+             // that in the unused input 2 content rect
++#if __VERSION__ == 100
++            v_params.y = aFilterInput2ContentScaleAndOffset.x;
++#else
+             vFloat0.x = aFilterInput2ContentScaleAndOffset.x;
++#endif
+         } else if (wr_switch_2 == (FILTER_TO_ALPHA) || wr_switch_2 == (FILTER_TO_ALPHA_CONVERTSRGB)) {
+         } else if (wr_switch_2 == (FILTER_BLEND_COLOR) || wr_switch_2 == (FILTER_BLEND_COLOR_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DARKEN) || wr_switch_2 == (FILTER_BLEND_DARKEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_EXCLUSION) || wr_switch_2 == (FILTER_BLEND_EXCLUSION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HUE) || wr_switch_2 == (FILTER_BLEND_HUE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LIGHTEN) || wr_switch_2 == (FILTER_BLEND_LIGHTEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_MULTIPLY) || wr_switch_2 == (FILTER_BLEND_MULTIPLY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_NORMAL) || wr_switch_2 == (FILTER_BLEND_NORMAL_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_OVERLAY) || wr_switch_2 == (FILTER_BLEND_OVERLAY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SATURATION) || wr_switch_2 == (FILTER_BLEND_SATURATION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SCREEN) || wr_switch_2 == (FILTER_BLEND_SCREEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT_CONVERTSRGB)) {
+         } else if (wr_switch_2 == (FILTER_COLOR_MATRIX) || wr_switch_2 == (FILTER_COLOR_MATRIX_CONVERTSRGB)) {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
++#if __VERSION__ == 100
++            v_params.zw = vec2(gpu_buffer_uv);
++#else
+             WR_GPU_BUFFER_FETCH_DIRECT_4(mat_data, gpu_buffer_uv);
+             vColorMat = mat4(mat_data[0], mat_data[1], mat_data[2], mat_data[3]);
++#endif
+             vFilterData0 = fetch_from_gpu_buffer_1f_direct(gpu_buffer_uv + ivec2(4, 0));
+         } else if (wr_switch_2 == (FILTER_COMPONENT_TRANSFER) || wr_switch_2 == (FILTER_COMPONENT_TRANSFER_CONVERTSRGB)) {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
++#if __VERSION__ == 100
++            v_params.zw = vec2(gpu_buffer_uv);
++#else
+             vData = ivec4(gpu_buffer_uv, 0, 0);
++#endif
+         } else if (wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC) || wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC_CONVERTSRGB)) {
+             // arithmetic parameters
+             vFilterData0 = fetch_from_gpu_buffer_1f(aFilterExtraDataAddress);
+@@ -474,6 +515,11 @@ vec4 sampleInUvRectRepeat(sampler2D sampler, vec2 uv, vec4 uvRect) {
+ }
+ 
+ void main(void) {
++#if __VERSION__ == 100
++    float packed_kind = floor(v_params.x + 0.5);
++    vFilterInputCount = int(mod(packed_kind, 4.0));
++    vFilterKind = int(floor(packed_kind / 4.0));
++#endif
+     // Raw premultiplied color of source texture
+     vec4 Rs = vec4(0.0, 0.0, 0.0, 0.0);
+     // Raw premultiplied color of destination texture
+@@ -579,7 +625,12 @@ void main(void) {
+         result.rgb = (1.0 - Rb.a) * Rs.rgb + (1.0 - Rs.a) * Rb.rgb + Rs.a * Rb.a * result.rgb;
+         result.a = Rb.a * (1.0 - Rs.a) + Rs.a;
+     } else if (vFilterKind == FILTER_COLOR_MATRIX || vFilterKind == FILTER_COLOR_MATRIX_CONVERTSRGB) {
++#if __VERSION__ == 100
++        WR_GPU_BUFFER_FETCH_DIRECT_4(mat_data, vData.xy);
++        result = mat4(mat_data[0], mat_data[1], mat_data[2], mat_data[3]) * Ns + vFilterData0;
++#else
+         result = vColorMat * Ns + vFilterData0;
++#endif
+         result = clamp(result, vec4(0.0), vec4(1.0));
+         result.rgb = result.rgb * result.a;
+     } else if (vFilterKind == FILTER_COMPONENT_TRANSFER || vFilterKind == FILTER_COMPONENT_TRANSFER_CONVERTSRGB) {
+diff --git a/gfx/wr/webrender/res/prim_shared.glsl b/gfx/wr/webrender/res/prim_shared.glsl
+index 819d5f93864c..4dcc584e2074 100644
+--- a/gfx/wr/webrender/res/prim_shared.glsl
++++ b/gfx/wr/webrender/res/prim_shared.glsl
+@@ -16,7 +16,7 @@
+ 
+ uniform sampler2D sClipMask;
+ 
+-#ifndef SWGL_CLIP_MASK
++#if !defined(SWGL_CLIP_MASK) && !defined(WR_NO_CLIP_MASK)
+ // TODO: convert back to RectWithEndpoint if driver issues are resolved, if ever.
+ flat varying mediump vec4 vClipMaskUvBounds;
+ #if __VERSION__ == 100 && defined(VECS_PER_SPECIFIC_BRUSH) && (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
+@@ -211,6 +211,7 @@ void write_clip(vec4 world_pos, ClipArea area, PictureTask task) {
+         area.task_rect.p0,
+         rect_size(area.task_rect)
+     );
++#elif defined(WR_NO_CLIP_MASK)
+ #else
+     vec2 uv = world_pos.xy * area.device_pixel_scale +
+         world_pos.w * (area.task_rect.p0 - area.screen_origin);
+@@ -243,7 +244,7 @@ struct Fragment {
+ };
+ 
+ float do_clip() {
+-#ifdef SWGL_CLIP_MASK
++#if defined(SWGL_CLIP_MASK) || defined(WR_NO_CLIP_MASK)
+     // SWGL relies on builtin clip-mask support to do this more efficiently,
+     // so no clipping is required here.
+     return 1.0;
+-- 
+2.56.0
+

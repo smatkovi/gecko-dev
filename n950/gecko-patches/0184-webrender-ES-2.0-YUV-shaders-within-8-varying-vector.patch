@@ -1,0 +1,204 @@
+From 2894642c1333e21c4c37826ac2d0a6df72379388 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:37:10 +0100
+Subject: [PATCH] webrender: ES 2.0 YUV shaders within 8 varying vectors
+
+brush_yuv_image (44 components) and composite with YUV (32 and 40, in up
+to 12 varyings) pass the planes' common position, their uv rects and the
+channel bit depth, color space and format packed in one float; the
+fragment shader derives the sample positions and bounds and the color
+matrix (get_rgb_from_ycbcr_info, now also in the ES 2.0 fragment stage).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/brush_yuv_image.glsl | 54 +++++++++++++++++++++++
+ gfx/wr/webrender/res/composite.glsl       | 44 ++++++++++++++++--
+ gfx/wr/webrender/res/yuv.glsl             |  4 +-
+ 3 files changed, 98 insertions(+), 4 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/brush_yuv_image.glsl b/gfx/wr/webrender/res/brush_yuv_image.glsl
+index c4b33733dc3e..3587c75a9ff9 100644
+--- a/gfx/wr/webrender/res/brush_yuv_image.glsl
++++ b/gfx/wr/webrender/res/brush_yuv_image.glsl
+@@ -6,6 +6,16 @@
+ 
+ #include shared,prim_shared,brush,yuv,image_source
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, 44 components otherwise): the
++// planes' common position f (xy) with channel bit depth, color space and
++// format packed in z, and the planes' uv rects in texels; the fragment
++// shader derives sample positions, bounds and the color matrix.
++varying highp vec4 v_yuv_f_prim;
++flat varying highp vec4 v_uv_rect_y;
++flat varying highp vec4 v_uv_rect_u;
++flat varying highp vec4 v_uv_rect_v;
++#else
+ varying highp vec2 vUv_Y;
+ flat varying highp vec4 vUvBounds_Y;
+ 
+@@ -20,6 +30,7 @@ flat varying YUV_PRECISION mat3 vRgbFromDebiasedYcbcr;
+ 
+ // YUV format. Packed in to vector to work around bug 1630356.
+ flat varying mediump ivec2 vFormat;
++#endif
+ 
+ #ifdef SWGL_DRAW_SPAN
+ flat varying mediump int vRescaleFactor;
+@@ -52,6 +63,24 @@ void brush_vs(
+ 
+     YuvPrimitive prim = fetch_yuv_primitive(prim_address);
+ 
++#if __VERSION__ == 100
++    v_yuv_f_prim = vec4(f, float(prim.channel_bit_depth + 32 * prim.color_space +
++                                 256 * prim.yuv_format), 0.0);
++    ImageSource res_y = fetch_image_source(prim_user_data.x);
++    v_uv_rect_y = vec4(res_y.uv_rect.p0, res_y.uv_rect.p1);
++    v_uv_rect_u = vec4(0.0);
++    v_uv_rect_v = vec4(0.0);
++    if (prim.yuv_format == YUV_FORMAT_PLANAR || prim.yuv_format == YUV_FORMAT_NV12 ||
++        prim.yuv_format == YUV_FORMAT_P010) {
++        ImageSource res_u = fetch_image_source(prim_user_data.y);
++        v_uv_rect_u = vec4(res_u.uv_rect.p0, res_u.uv_rect.p1);
++    }
++    if (prim.yuv_format == YUV_FORMAT_PLANAR) {
++        ImageSource res_v = fetch_image_source(prim_user_data.z);
++        v_uv_rect_v = vec4(res_v.uv_rect.p0, res_v.uv_rect.p1);
++    }
++#else
++
+ #ifdef SWGL_DRAW_SPAN
+     // swgl_commitTextureLinearYUV needs to know the color space specifier and
+     // also needs to know how many bits of scaling are required to normalize
+@@ -85,12 +114,36 @@ void brush_vs(
+         ImageSource res_y = fetch_image_source(prim_user_data.x);
+         write_uv_rect(res_y.uv_rect.p0, res_y.uv_rect.p1, f, TEX_SIZE_YUV(sColor0), vUv_Y, vUvBounds_Y);
+     }
++#endif
+ }
+ #endif
+ 
+ #ifdef WR_FRAGMENT_SHADER
+ 
+ Fragment brush_fs() {
++#if __VERSION__ == 100
++    float packed_prim = floor(v_yuv_f_prim.z + 0.5);
++    YuvPrimitive prim = YuvPrimitive(int(mod(packed_prim, 32.0)),
++                                     int(mod(floor(packed_prim / 32.0), 8.0)),
++                                     int(floor(packed_prim / 256.0)));
++    YuvColorMatrixInfo mat_info = get_rgb_from_ycbcr_info(prim);
++    vec2 uv_y, uv_u, uv_v;
++    vec4 bounds_y, bounds_u, bounds_v;
++    write_uv_rect(v_uv_rect_y.xy, v_uv_rect_y.zw, v_yuv_f_prim.xy, TEX_SIZE_YUV(sColor0), uv_y, bounds_y);
++    write_uv_rect(v_uv_rect_u.xy, v_uv_rect_u.zw, v_yuv_f_prim.xy, TEX_SIZE_YUV(sColor1), uv_u, bounds_u);
++    write_uv_rect(v_uv_rect_v.xy, v_uv_rect_v.zw, v_yuv_f_prim.xy, TEX_SIZE_YUV(sColor2), uv_v, bounds_v);
++    vec4 color = sample_yuv(
++        prim.yuv_format,
++        mat_info.ycbcr_bias,
++        mat_info.rgb_from_debiased_ycbrc,
++        uv_y,
++        uv_u,
++        uv_v,
++        bounds_y,
++        bounds_u,
++        bounds_v
++    );
++#else
+     vec4 color = sample_yuv(
+         vFormat.x,
+         vYcbcrBias,
+@@ -102,6 +155,7 @@ Fragment brush_fs() {
+         vUvBounds_U,
+         vUvBounds_V
+     );
++#endif
+ 
+ #ifdef WR_FEATURE_ALPHA_PASS
+     color *= antialias_brush();
+diff --git a/gfx/wr/webrender/res/composite.glsl b/gfx/wr/webrender/res/composite.glsl
+index a676750a703d..1b42767dbf32 100644
+--- a/gfx/wr/webrender/res/composite.glsl
++++ b/gfx/wr/webrender/res/composite.glsl
+@@ -22,7 +22,16 @@ flat varying highp vec2 vRoundedClipParams;
+ flat varying highp vec4 vRoundedClipRadii;
+ #endif
+ 
+-#ifdef WR_FEATURE_YUV
++#if defined(WR_FEATURE_YUV) && __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors): the planes' common position
++// (xy) with channel bit depth, color space and format packed in z, and the
++// planes' uv rects; the fragment shader derives sample positions, bounds
++// and the color matrix.
++varying highp vec4 v_yuv_uv_prim;
++flat varying highp vec4 v_uv_rect_y;
++flat varying highp vec4 v_uv_rect_u;
++flat varying highp vec4 v_uv_rect_v;
++#elif defined(WR_FEATURE_YUV)
+ flat varying YUV_PRECISION vec3 vYcbcrBias;
+ flat varying YUV_PRECISION mat3 vRgbFromDebiasedYcbcr;
+ // YUV format. Packed in to vector to avoid bug 1630356.
+@@ -102,7 +111,14 @@ void main(void) {
+     // Derive the normalized UV from the clipped vertex position
+     vec2 uv = (clipped_world_pos - device_rect.xy) / (device_rect.zw - device_rect.xy);
+ 
+-#ifdef WR_FEATURE_YUV
++#if defined(WR_FEATURE_YUV) && __VERSION__ == 100
++    YuvPrimitive prim = fetch_yuv_primitive();
++    v_yuv_uv_prim = vec4(uv, float(prim.channel_bit_depth + 32 * prim.color_space +
++                                  256 * prim.yuv_format), 0.0);
++    v_uv_rect_y = aUvRect0;
++    v_uv_rect_u = aUvRect1;
++    v_uv_rect_v = aUvRect2;
++#elif defined(WR_FEATURE_YUV)
+     YuvPrimitive prim = fetch_yuv_primitive();
+ 
+ #ifdef SWGL_DRAW_SPAN
+@@ -194,7 +210,29 @@ float sd_round_box(in vec2 pos, in vec2 half_box_size, in vec4 radii) {
+ #endif
+ 
+ void main(void) {
+-#ifdef WR_FEATURE_YUV
++#if defined(WR_FEATURE_YUV) && __VERSION__ == 100
++    float packed_prim = floor(v_yuv_uv_prim.z + 0.5);
++    YuvPrimitive prim = YuvPrimitive(int(mod(packed_prim, 32.0)),
++                                     int(mod(floor(packed_prim / 32.0), 8.0)),
++                                     int(floor(packed_prim / 256.0)));
++    YuvColorMatrixInfo mat_info = get_rgb_from_ycbcr_info(prim);
++    vec2 uv_y, uv_u, uv_v;
++    vec4 bounds_y, bounds_u, bounds_v;
++    write_uv_rect(v_uv_rect_y.xy, v_uv_rect_y.zw, v_yuv_uv_prim.xy, TEX_SIZE_YUV(sColor0), uv_y, bounds_y);
++    write_uv_rect(v_uv_rect_u.xy, v_uv_rect_u.zw, v_yuv_uv_prim.xy, TEX_SIZE_YUV(sColor1), uv_u, bounds_u);
++    write_uv_rect(v_uv_rect_v.xy, v_uv_rect_v.zw, v_yuv_uv_prim.xy, TEX_SIZE_YUV(sColor2), uv_v, bounds_v);
++    vec4 color = sample_yuv(
++        prim.yuv_format,
++        mat_info.ycbcr_bias,
++        mat_info.rgb_from_debiased_ycbrc,
++        uv_y,
++        uv_u,
++        uv_v,
++        bounds_y,
++        bounds_u,
++        bounds_v
++    );
++#elif defined(WR_FEATURE_YUV)
+     vec4 color = sample_yuv(
+         vYuvFormat.x,
+         vYcbcrBias,
+diff --git a/gfx/wr/webrender/res/yuv.glsl b/gfx/wr/webrender/res/yuv.glsl
+index 440fe05a843d..c52f335690e3 100644
+--- a/gfx/wr/webrender/res/yuv.glsl
++++ b/gfx/wr/webrender/res/yuv.glsl
+@@ -13,7 +13,9 @@
+ //#define YUV_PRECISION mediump
+ #define YUV_PRECISION highp
+ 
+-#ifdef WR_VERTEX_SHADER
++// ES 2.0: the YUV shaders' fragment stage derives the color matrix and the
++// sample rects itself (the PowerVR SGX530 has 8 varying vectors).
++#if defined(WR_VERTEX_SHADER) || __VERSION__ == 100
+ 
+ #ifdef WR_FEATURE_TEXTURE_RECT
+     #define TEX_SIZE_YUV(sampler) vec2(1.0)
+-- 
+2.56.0
+
