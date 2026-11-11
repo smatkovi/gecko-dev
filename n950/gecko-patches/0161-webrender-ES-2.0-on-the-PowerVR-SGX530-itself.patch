@@ -1,0 +1,298 @@
+From 7adb0a27e96ba91ce7d44f22600049946b0161a9 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 14:59:20 +0100
+Subject: [PATCH 161/162] webrender: ES 2.0 on the PowerVR SGX530 itself
+
+What the N950's driver (PowerVR SGX530, DDK 1.17) needs beyond Mesa's
+ES 2.0 context:
+- only the texture units the GPU has (8) are reset,
+- no glMapBufferRange: repeated instances are built in a reused buffer
+  and handed to glBufferData,
+- no unsigned literals in GLSL ES 1.00, not even in a skipped #else,
+- integer varyings: assigning to a component of the rounded conversion
+  is no l-value. The vertex shader now works on a plain integer variable
+  that a main wrapper (around the shader's renamed main) copies into the
+  float varying, only where the varying is declared.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/device/gl.rs    |  37 +++++++-
+ gfx/wr/webrender_build/src/shader.rs | 136 +++++++++++++--------------
+ 2 files changed, 98 insertions(+), 75 deletions(-)
+
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index b5fb4d230f6b..ac2706cc2603 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -1223,6 +1223,10 @@ pub struct Device {
+ 
+     // device state
+     bound_textures: [gl::GLuint; 16],
++    /// Texture units the GPU has, at most 16 (8 on a PowerVR SGX530).
++    texture_units: usize,
++    /// ES 2.0 cannot map buffers: repeated instances are built here.
++    instance_scratch: Vec<u8>,
+     bound_program: gl::GLuint,
+     bound_program_name: Rc<std::ffi::CString>,
+     bound_vao: gl::GLuint,
+@@ -1637,6 +1641,11 @@ impl Device {
+         info!("Max texture size: {}", max_texture_size);
+ 
+         let is_gles2 = is_gles2_context(&*gl, &version_string);
++        let mut max_units = [0];
++        unsafe {
++            gl.get_integer_v(gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mut max_units);
++        }
++        let texture_units = (max_units[0].max(1) as usize).min(16);
+         let mut extensions = Vec::new();
+         if is_gles2 {
+             // ES 2.0 has no indexed extension query
+@@ -2135,6 +2144,8 @@ impl Device {
+             depth_targets: FastHashMap::default(),
+ 
+             bound_textures: [0; 16],
++            texture_units,
++            instance_scratch: Vec::new(),
+             bound_program: 0,
+             bound_program_name: Rc::new(std::ffi::CString::new("").unwrap()),
+             bound_vao: 0,
+@@ -2274,7 +2285,7 @@ impl Device {
+     }
+ 
+     pub fn reset_state(&mut self) {
+-        for i in 0 .. self.bound_textures.len() {
++        for i in 0 .. self.texture_units {
+             self.bound_textures[i] = 0;
+             self.gl.active_texture(gl::TEXTURE0 + i as gl::GLuint);
+             self.gl.bind_texture(gl::TEXTURE_2D, 0);
+@@ -3842,6 +3853,28 @@ impl Device {
+         debug_assert_eq!(vao.instance_stride as usize, mem::size_of::<V>());
+ 
+         match repeat {
++            Some(count) if self.capabilities.is_gles2 => {
++                let target = gl::ARRAY_BUFFER;
++                self.gl.bind_buffer(target, vao.instance_vbo_id.0);
++                let stride = mem::size_of::<V>();
++                let src = unsafe {
++                    slice::from_raw_parts(instances.as_ptr() as *const u8, instances.len() * stride)
++                };
++                let mut buf = mem::take(&mut self.instance_scratch);
++                buf.clear();
++                for instance in src.chunks_exact(stride) {
++                    for _ in 0 .. count.get() {
++                        buf.extend_from_slice(instance);
++                    }
++                }
++                self.gl.buffer_data_untyped(
++                    target,
++                    buf.len() as _,
++                    buf.as_ptr() as *const _,
++                    usage_hint.to_gl(),
++                );
++                self.instance_scratch = buf;
++            }
+             Some(count) => {
+                 let target = gl::ARRAY_BUFFER;
+                 self.gl.bind_buffer(target, vao.instance_vbo_id.0);
+@@ -4040,7 +4073,7 @@ impl Device {
+         self.gl.bind_texture(gl::TEXTURE_2D, 0);
+         self.gl.use_program(0);
+ 
+-        for i in 0 .. self.bound_textures.len() {
++        for i in 0 .. self.texture_units {
+             self.gl.active_texture(gl::TEXTURE0 + i as gl::GLuint);
+             self.gl.bind_texture(gl::TEXTURE_2D, 0);
+         }
+diff --git a/gfx/wr/webrender_build/src/shader.rs b/gfx/wr/webrender_build/src/shader.rs
+index bacbdbbf2420..d1a023c84f6c 100644
+--- a/gfx/wr/webrender_build/src/shader.rs
++++ b/gfx/wr/webrender_build/src/shader.rs
+@@ -162,6 +162,7 @@ pub fn do_build_shader_string<F: FnMut(&str), G: Fn(&str) -> Cow<'static, str>>(
+        build_shader_main_string(base_filename, get_source, &mut |s: &str| {
+            output(&rewriter.rewrite(s))
+        });
++       output(&rewriter.finish());
+    } else {
+        build_shader_main_string(base_filename, get_source, &mut output);
+    }
+@@ -169,29 +170,43 @@ pub fn do_build_shader_string<F: FnMut(&str), G: Fn(&str) -> Cow<'static, str>>(
+ 
+ /// The GLSL ES 1.00 rewrite of one shader, line by line: rewrite_for_gles2,
+ /// plus integer varyings, which ESSL 1 does not allow. Each becomes a highp
+-/// float varying `name_f`; vertex shader assignments to it are converted,
+-/// and reads round it back (`name` is defined as the rounded integer).
++/// float varying `name_f`. The vertex shader works on a plain integer
++/// variable `name`, copied to `name_f` after its main (renamed
++/// `wr_vs_main`) ran; the fragment shader reads `name` as `name_f` rounded.
+ struct Gles2Rewriter {
+     kind: ShaderKind,
+-    int_varyings: Vec<(String, &'static str)>,
+-    open_assignment: Option<i32>,
++    int_varyings: Vec<(String, &'static str, String)>,
+ }
+ 
+ impl Gles2Rewriter {
+     fn new(kind: ShaderKind) -> Self {
+-        Gles2Rewriter { kind, int_varyings: Vec::new(), open_assignment: None }
++        Gles2Rewriter { kind, int_varyings: Vec::new() }
++    }
++
++    /// The vertex shader's main, which copies the integer varyings.
++    fn finish(&self) -> String {
++        if self.kind != ShaderKind::Vertex {
++            return String::new();
++        }
++        let mut out = String::from("\nvoid main() {\n    wr_vs_main();\n");
++        for (name, float_ty, _) in &self.int_varyings {
++            out.push_str(&format!(
++                "#ifdef WR_INT_VARYING_{}\n    {}_f = {}({});\n#endif\n",
++                name, name, float_ty, name
++            ));
++        }
++        out.push_str("}\n");
++        out
+     }
+ 
+     fn rewrite(&mut self, line: &str) -> String {
+         if line == "\n" {
+             return line.to_string();
+         }
+-        if let Some(depth) = self.open_assignment {
+-            let (out, state) = close_conversion(&rewrite_for_gles2(line), depth);
+-            self.open_assignment = state;
+-            return out;
+-        }
+         let trimmed = line.trim();
++        if self.kind == ShaderKind::Vertex && trimmed.starts_with("void main(") {
++            return rewrite_for_gles2(&line.replacen("main(", "wr_vs_main(", 1));
++        }
+         if trimmed == "out vec4 oFragColor;" {
+             return "#define oFragColor gl_FragColor".to_string();
+         }
+@@ -207,77 +222,52 @@ impl Gles2Rewriter {
+                 _ => None,
+             };
+             if let Some(float_ty) = float_ty {
+-                self.int_varyings.push((name.to_string(), float_ty));
+-                return format!(
+-                    "varying highp {} {}_f;\n#define {} {}(floor({}_f + 0.5))",
+-                    float_ty, name, name, ty, name
+-                );
+-            }
+-        }
+-        if self.kind == ShaderKind::Vertex {
+-            if let Some(out) = self.open_assignment_to_varying(line) {
+-                return out;
++                self.int_varyings.push((name.to_string(), float_ty, ty.to_string()));
++                return match self.kind {
++                    ShaderKind::Vertex => {
++                        format!(
++                            "varying highp {} {}_f;\n{} {};\n#define WR_INT_VARYING_{}",
++                            float_ty, name, ty, name, name
++                        )
++                    }
++                    ShaderKind::Fragment => format!(
++                        "varying highp {} {}_f;\n#define {} {}(floor({}_f + 0.5))",
++                        float_ty, name, name, ty, name
++                    ),
++                };
+             }
+         }
+         rewrite_for_gles2(line)
+     }
+ 
+-    /// `v = ...;` or `v.xy = ...;` to an integer varying: `v_f = vecN(...);`
+-    fn open_assignment_to_varying(&mut self, line: &str) -> Option<String> {
+-        let trimmed = line.trim_start();
+-        let indent = &line[..line.len() - trimmed.len()];
+-        for (name, float_ty) in &self.int_varyings {
+-            let Some(after) = trimmed.strip_prefix(name.as_str()) else { continue };
+-            let (swizzle, after) = match after.strip_prefix('.') {
+-                Some(rest) => {
+-                    let sw = leading_ident(rest);
+-                    (format!(".{}", sw), &rest[sw.len()..])
+-                }
+-                None => (String::new(), after),
+-            };
+-            if after.starts_with(|c: char| is_ident_char(c)) {
+-                continue;
+-            }
+-            let Some(rhs) = after.trim_start().strip_prefix('=') else { continue };
+-            if rhs.starts_with('=') {
+-                continue;
+-            }
+-            let ty = match swizzle.len() {
+-                0 => float_ty.to_string(),
+-                2 => "float".to_string(),
+-                n => format!("vec{}", n - 1),
+-            };
+-            let head = format!("{}{}_f{} = {}(", indent, name, swizzle, ty);
+-            let (rest, state) = close_conversion(&rewrite_for_gles2(rhs.trim_start()), 0);
+-            self.open_assignment = state;
+-            return Some(format!("{}{}", head, rest));
+-        }
+-        None
+-    }
+-
+ }
+ 
+-/// Closes a conversion `vecN(` opened before `s` at the semicolon that ends
+-/// the statement; `depth` counts the parentheses still open. Returns the
+-/// line and, while the statement goes on, the depth for the next line.
+-fn close_conversion(s: &str, mut depth: i32) -> (String, Option<i32>) {
+-    let mut out = String::new();
+-    let mut closed = false;
+-    for c in s.chars() {
+-        if !closed {
+-            match c {
+-                '(' => depth += 1,
+-                ')' => depth -= 1,
+-                ';' if depth == 0 => {
+-                    out.push(')');
+-                    closed = true;
+-                }
+-                _ => {}
+-            }
++/// `8U` -> `8`: ESSL 1 has no unsigned literals, and some compilers (PowerVR
++/// SGX) reject them even in a skipped #else.
++fn strip_uint_suffixes(s: &str) -> String {
++    let chars: Vec<char> = s.chars().collect();
++    let mut out = String::with_capacity(s.len());
++    let mut i = 0;
++    while i < chars.len() {
++        let c = chars[i];
++        let starts_number = c.is_ascii_digit() && (i == 0 || !is_ident_char(chars[i - 1]));
++        if !starts_number {
++            out.push(c);
++            i += 1;
++            continue;
++        }
++        while i < chars.len() && (chars[i].is_ascii_hexdigit() || chars[i] == 'x' || chars[i] == 'X') {
++            out.push(chars[i]);
++            i += 1;
++        }
++        if i < chars.len()
++            && (chars[i] == 'u' || chars[i] == 'U')
++            && !chars.get(i + 1).map_or(false, |&n| is_ident_char(n))
++        {
++            i += 1;
+         }
+-        out.push(c);
+     }
+-    (out, if closed { None } else { Some(depth) })
++    out
+ }
+ 
+ fn is_ident_char(c: char) -> bool {
+@@ -301,7 +291,7 @@ pub fn rewrite_for_gles2(line: &str) -> String {
+     if trimmed.starts_with("//") {
+         return line.to_string();
+     }
+-    let mut out = replace_word(line, "isampler2D", "sampler2D");
++    let mut out = strip_uint_suffixes(&replace_word(line, "isampler2D", "sampler2D"));
+     for (from, to) in [
+         ("texture(", "texture2D("),
+         ("mix(", "wr_mix("),
+-- 
+2.56.0
+
