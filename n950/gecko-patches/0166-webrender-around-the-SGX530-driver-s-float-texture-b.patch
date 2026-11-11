@@ -1,0 +1,134 @@
+From 6b5462567e0148e0a216eebf684746ae504a72c6 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 16:03:01 +0100
+Subject: [PATCH 166/167] webrender: around the SGX530 driver's float texture
+ bug, no GPU queries
+
+The PowerVR SGX530's driver (DDK 1.17) corrupts its heap when a float
+texture the GPU may still read gets a sub-image: the copy of the old
+contents is sized for 4-byte texels (reproduced with
+browser/webrender-gles2/tools/gles2-floattex.c of n950-maemo-leste; byte
+textures and freshly allocated ones are fine). On ES 2.0 a float texture
+is allocated anew at its first upload in a frame; WebRender rewrites
+those data textures every frame.
+
+GPU timer and sample queries only with GL_EXT_disjoint_timer_query on
+ES 2.0. The texture unit query is skipped under SWGL, which has none.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/device/gl.rs    | 39 +++++++++++++++++++++++++---
+ gfx/wr/webrender/src/renderer/mod.rs |  5 +++-
+ 2 files changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index bb0e26afd793..8551459bd14b 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -1120,6 +1120,9 @@ pub struct Capabilities {
+     pub supports_texture_usage: bool,
+     /// Whether offscreen render targets can be partially updated.
+     pub supports_render_target_partial_update: bool,
++    /// Whether GPU timer and sample queries work (on ES 2.0 only with
++    /// GL_EXT_disjoint_timer_query).
++    pub supports_gpu_queries: bool,
+     /// Whether we can use SSBOs.
+     pub supports_shader_storage_object: bool,
+     /// Whether to enforce that texture uploads be batched regardless of what
+@@ -1231,6 +1234,9 @@ pub struct Device {
+     /// the texture of each sampler slot, each program's (slot, unit)
+     /// pairs, and the bound program's, checked before each draw.
+     slot_textures: [(gl::GLuint, gl::GLenum); 16],
++    /// ES 2.0: the frame in which each float texture was last re-allocated
++    /// (see update_impl_gles2).
++    float_textures_renewed: FastHashMap<gl::GLuint, GpuFrameId>,
+     program_units: FastHashMap<gl::GLuint, Vec<(usize, usize)>>,
+     bound_program_units: Vec<(usize, usize)>,
+     bound_program: gl::GLuint,
+@@ -1647,9 +1653,11 @@ impl Device {
+         info!("Max texture size: {}", max_texture_size);
+ 
+         let is_gles2 = is_gles2_context(&*gl, &version_string);
+-        let mut max_units = [0];
+-        unsafe {
+-            gl.get_integer_v(gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mut max_units);
++        let mut max_units = [16];
++        if !renderer_name.starts_with("Software WebRender") {
++            unsafe {
++                gl.get_integer_v(gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mut max_units);
++            }
+         }
+         let texture_units = (max_units[0].max(1) as usize)
+             .min(std::env::var("WR_TEXTURE_UNITS").ok().and_then(|v| v.parse().ok()).unwrap_or(16));
+@@ -2114,6 +2122,7 @@ impl Device {
+ 
+             capabilities: Capabilities {
+                 is_gles2,
++                supports_gpu_queries: !is_gles2 || supports_extension(&extensions, "GL_EXT_disjoint_timer_query"),
+                 supports_multisampling: false, //TODO
+                 supports_copy_image_sub_data,
+                 supports_color_buffer_float,
+@@ -2154,6 +2163,7 @@ impl Device {
+             texture_units,
+             instance_scratch: Vec::new(),
+             slot_textures: [(0, gl::TEXTURE_2D); 16],
++            float_textures_renewed: FastHashMap::default(),
+             program_units: FastHashMap::default(),
+             bound_program_units: Vec::new(),
+             bound_program: 0,
+@@ -3334,6 +3344,7 @@ impl Device {
+                 slot_texture.0 = 0;
+             }
+         }
++        self.float_textures_renewed.remove(&texture.id);
+ 
+         self.textures_deleted += 1;
+ 
+@@ -5254,6 +5265,28 @@ impl<'a> TextureUploader<'a> {
+         } else {
+             src
+         };
++        // The PowerVR SGX530's driver (DDK 1.17) corrupts its heap when a
++        // float texture the GPU may still be reading gets a sub-image: the
++        // copy it keeps of the old contents is sized for 4-byte texels. A
++        // texture allocated anew has no such copy. WebRender rewrites its
++        // float (data) textures every frame, so the first upload of a frame
++        // re-allocates them.
++        if desc.pixel_type == gl::FLOAT || desc.pixel_type == gl::HALF_FLOAT_OES {
++            let frame_id = device.frame_id;
++            if device.float_textures_renewed.insert(chunk.texture.id, frame_id) != Some(frame_id) {
++                device.gl.tex_image_2d(
++                    chunk.texture.target,
++                    0,
++                    desc.internal as gl::GLint,
++                    chunk.texture.size.width as gl::GLint,
++                    chunk.texture.size.height as gl::GLint,
++                    0,
++                    desc.external,
++                    desc.pixel_type,
++                    None,
++                );
++            }
++        }
+         let pos = chunk.rect.min;
+         device.gl.tex_sub_image_2d(
+             chunk.texture.target,
+diff --git a/gfx/wr/webrender/src/renderer/mod.rs b/gfx/wr/webrender/src/renderer/mod.rs
+index 8962a1a6bb5e..b6ac6aa474db 100644
+--- a/gfx/wr/webrender/src/renderer/mod.rs
++++ b/gfx/wr/webrender/src/renderer/mod.rs
+@@ -4108,7 +4108,10 @@ impl Renderer {
+         self.debug_flags
+     }
+ 
+-    pub fn set_debug_flags(&mut self, flags: DebugFlags) {
++    pub fn set_debug_flags(&mut self, mut flags: DebugFlags) {
++        if !self.device.get_capabilities().supports_gpu_queries {
++            flags.remove(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES);
++        }
+         if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_TIME_QUERIES) {
+             if enabled {
+                 self.gpu_profiler.enable_timers();
+-- 
+2.56.0
+

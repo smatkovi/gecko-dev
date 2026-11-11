@@ -1,0 +1,253 @@
+From 51beecff055e74ffbc87b5f36be87f38774f1391 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 16:03:02 +0100
+Subject: [PATCH 167/167] wrench: measuring on an ES 2.0 phone
+
+- EGL before GLX (WRENCH_GLX for the old order),
+- perf: wall-clock frame times (frame_time_ns), no wait for GPU
+  profiles that never come, WRENCH_NO_VSYNC,
+- WRENCH_HIDDEN keeps the window unmapped,
+- WRENCH_GL_RING prints the last 64 GL calls on SIGSEGV or SIGABRT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/benchmarks/one.list |  1 +
+ gfx/wr/wrench/src/main.rs         | 70 ++++++++++++++++++++++++++++++-
+ gfx/wr/wrench/src/perf.rs         | 21 +++++++++-
+ 3 files changed, 88 insertions(+), 4 deletions(-)
+ create mode 100644 gfx/wr/wrench/benchmarks/one.list
+
+diff --git a/gfx/wr/wrench/benchmarks/one.list b/gfx/wr/wrench/benchmarks/one.list
+new file mode 100644
+index 000000000000..0fbfc62b3949
+--- /dev/null
++++ b/gfx/wr/wrench/benchmarks/one.list
+@@ -0,0 +1 @@
++simple-batching.yaml
+diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
+index 11ddf8005e11..cac1ec6d5cc8 100644
+--- a/gfx/wr/wrench/src/main.rs
++++ b/gfx/wr/wrench/src/main.rs
+@@ -364,6 +364,63 @@ fn make_software_context() -> swgl::Context {
+     panic!("software feature not enabled")
+ }
+ 
++/// WRENCH_GL_RING: the names of the last GL calls, printed on SIGSEGV or
++/// SIGABRT, to find the call a driver crashes in.
++mod glring {
++    use gleam::gl;
++    use std::rc::Rc;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    const N: usize = 64;
++    static PTRS: [AtomicUsize; N] = [const { AtomicUsize::new(0) }; N];
++    static LENS: [AtomicUsize; N] = [const { AtomicUsize::new(0) }; N];
++    static NEXT: AtomicUsize = AtomicUsize::new(0);
++
++    fn record(name: &str) {
++        let i = NEXT.fetch_add(1, Ordering::Relaxed) % N;
++        PTRS[i].store(name.as_ptr() as usize, Ordering::Relaxed);
++        LENS[i].store(name.len(), Ordering::Relaxed);
++    }
++
++    extern "C" fn dump(sig: libc::c_int) {
++        let n = NEXT.load(Ordering::Relaxed);
++        let msg = b"--- last GL calls (oldest first) ---\n";
++        unsafe {
++            libc::write(2, msg.as_ptr() as *const _, msg.len());
++            for k in n.saturating_sub(N) .. n {
++                let i = k % N;
++                let p = PTRS[i].load(Ordering::Relaxed);
++                let l = LENS[i].load(Ordering::Relaxed);
++                libc::write(2, p as *const _, l);
++                libc::write(2, b"\n".as_ptr() as *const _, 1);
++            }
++            libc::signal(sig, libc::SIG_DFL);
++            libc::raise(sig);
++        }
++    }
++
++    pub fn wrap(fns: Rc<dyn gl::Gl>) -> Rc<dyn gl::Gl> {
++        if std::env::var_os("WRENCH_GL_RING").is_none() {
++            return fns;
++        }
++        unsafe {
++            libc::signal(libc::SIGSEGV, dump as libc::sighandler_t);
++            libc::signal(libc::SIGABRT, dump as libc::sighandler_t);
++        }
++        gl::ProfilingGl::wrap(fns, std::time::Duration::ZERO, |name, _| record(name))
++    }
++}
++
++/// EGL first where GLX would be tried first: an OpenGL ES driver such as
++/// the PowerVR SGX's is reached through EGL, its GLX path is not stable.
++fn egl_preference() -> glutin_winit::ApiPreference {
++    if std::env::var_os("WRENCH_GLX").is_some() {
++        glutin_winit::ApiPreference::FallbackEgl
++    } else {
++        glutin_winit::ApiPreference::PreferEgl
++    }
++}
++
+ /// Create a windowed GL context using glutin 0.32 + glutin-winit.
+ /// For GlThenGles, use make_window_with_fallback instead.
+ fn make_window(
+@@ -376,12 +433,14 @@ fn make_window(
+     let sw_ctx = if software { Some(make_software_context()) } else { None };
+ 
+     let window_attrs = Window::default_attributes()
++        .with_visible(std::env::var_os("WRENCH_HIDDEN").is_none())
+         .with_title("WRench")
+         .with_inner_size(LogicalSize::new(size.width as f64, size.height as f64));
+ 
+     let template = ConfigTemplateBuilder::new().with_depth_size(24);
+ 
+     let (window, gl_config) = DisplayBuilder::new()
++        .with_preference(egl_preference())
+         .with_window_attributes(Some(window_attrs))
+         .build(event_loop, template, |configs| {
+             configs.reduce(|acc, config| {
+@@ -429,9 +488,11 @@ fn make_window(
+         gl_surface
+             .set_swap_interval(&gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+             .ok();
++    } else if std::env::var_os("WRENCH_NO_VSYNC").is_some() {
++        gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait).ok();
+     }
+ 
+-    let gl: Rc<dyn gl::Gl> = load_gl_fns(is_gles, &gl_display);
++    let gl: Rc<dyn gl::Gl> = glring::wrap(load_gl_fns(is_gles, &gl_display));
+ 
+     WindowWrapper::Windowed { window, gl_surface, gl_context, is_gles, gl, sw_ctx }
+ }
+@@ -454,12 +515,14 @@ fn make_window_with_fallback(
+     let sw_ctx = if software { Some(make_software_context()) } else { None };
+ 
+     let window_attrs = Window::default_attributes()
++        .with_visible(std::env::var_os("WRENCH_HIDDEN").is_none())
+         .with_title("WRench")
+         .with_inner_size(LogicalSize::new(size.width as f64, size.height as f64));
+ 
+     let template = ConfigTemplateBuilder::new().with_depth_size(24);
+ 
+     let (window, gl_config) = DisplayBuilder::new()
++        .with_preference(egl_preference())
+         .with_window_attributes(Some(window_attrs))
+         .build(event_loop, template, |configs| {
+             configs.reduce(|acc, c| if c.num_samples() > acc.num_samples() { c } else { acc }).unwrap()
+@@ -514,9 +577,11 @@ fn make_window_with_fallback(
+         gl_surface
+             .set_swap_interval(&gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+             .ok();
++    } else if std::env::var_os("WRENCH_NO_VSYNC").is_some() {
++        gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait).ok();
+     }
+ 
+-    let gl: Rc<dyn gl::Gl> = load_gl_fns(is_gles, &gl_display);
++    let gl: Rc<dyn gl::Gl> = glring::wrap(load_gl_fns(is_gles, &gl_display));
+ 
+     WindowWrapper::Windowed { window, gl_surface, gl_context, is_gles, gl, sw_ctx }
+ }
+@@ -781,6 +846,7 @@ impl ApplicationHandler for WrenchApp {
+             #[cfg(target_os = "windows")]
+             {
+                 let window_attrs = Window::default_attributes()
++        .with_visible(std::env::var_os("WRENCH_HIDDEN").is_none())
+                     .with_title("WRench")
+                     .with_inner_size(LogicalSize::new(self.size.width as f64, self.size.height as f64));
+ 
+diff --git a/gfx/wr/wrench/src/perf.rs b/gfx/wr/wrench/src/perf.rs
+index 6b3a1714087e..3fb29f842adb 100644
+--- a/gfx/wr/wrench/src/perf.rs
++++ b/gfx/wr/wrench/src/perf.rs
+@@ -72,7 +72,7 @@ impl BenchmarkManifest {
+     }
+ }
+ 
+-#[derive(Clone, Serialize, Deserialize)]
++#[derive(Clone, Default, Serialize, Deserialize)]
+ struct TestProfileRange {
+     min: u64,
+     avg: u64,
+@@ -85,6 +85,8 @@ struct TestProfile {
+     backend_time_ns: TestProfileRange,
+     composite_time_ns: TestProfileRange,
+     paint_time_ns: TestProfileRange,
++    #[serde(default)]
++    frame_time_ns: TestProfileRange,
+     draw_calls: usize,
+ }
+ 
+@@ -94,6 +96,7 @@ impl TestProfile {
+         backend_time_ns min, avg, max,\
+         composite_time_ns min, avg, max,\
+         paint_time_ns min, avg, max,\
++        frame_time_ns min, avg, max,\
+         draw_calls\n".to_string()
+     }
+ 
+@@ -102,11 +105,13 @@ impl TestProfile {
+                  {},{},{},\
+                  {},{},{},\
+                  {},{},{},\
++                 {},{},{},\
+                  {}\n",
+                 self.name,
+                 self.backend_time_ns.min,   self.backend_time_ns.avg,   self.backend_time_ns.max,
+                 self.composite_time_ns.min, self.composite_time_ns.avg, self.composite_time_ns.max,
+                 self.paint_time_ns.min,     self.paint_time_ns.avg,     self.paint_time_ns.max,
++                self.frame_time_ns.min,     self.frame_time_ns.avg,     self.frame_time_ns.max,
+                 self.draw_calls)
+     }
+ }
+@@ -208,14 +213,21 @@ impl<'a> PerfHarness<'a> {
+         self.wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+ 
+         let mut frame_count = 0;
++        let mut frame_times = Vec::new();
+ 
++        // Without GPU queries (OpenGL ES 2.0) no GPU profiles come.
+         while cpu_frame_profiles.len() < self.sample_count ||
+-            gpu_frame_profiles.len() < self.sample_count
++            (gpu_frame_profiles.len() < self.sample_count &&
++             frame_count < self.warmup_frames + 4 * self.sample_count)
+         {
++            let frame_start = std::time::Instant::now();
+             reader.do_frame(self.wrench);
+             self.rx.recv().unwrap();
+             self.wrench.render();
+             self.window.swap_buffers();
++            if frame_count >= self.warmup_frames {
++                frame_times.push(frame_start.elapsed().as_nanos() as u64);
++            }
+             let (cpu_profiles, gpu_profiles) = self.wrench.get_frame_profiles();
+             if frame_count >= self.warmup_frames {
+                 cpu_frame_profiles.extend(cpu_profiles);
+@@ -241,12 +253,14 @@ impl<'a> PerfHarness<'a> {
+         let composite_time_ns = extract_sample(&mut cpu_frame_profiles, |a| a.composite_time_ns);
+         let paint_time_ns = extract_sample(&mut gpu_frame_profiles, |a| a.paint_time_ns);
+         let backend_time_ns = extract_sample(&mut cpu_frame_profiles, |a| a.backend_time_ns);
++        let frame_time_ns = extract_sample(&mut frame_times, |&t| t);
+ 
+         TestProfile {
+             name: filename.to_str().unwrap().to_string(),
+             composite_time_ns,
+             paint_time_ns,
+             backend_time_ns,
++            frame_time_ns,
+             draw_calls,
+         }
+     }
+@@ -259,6 +273,9 @@ where
+     F: Fn(&T) -> u64,
+ {
+     let mut samples: Vec<u64> = profiles.iter().map(f).collect();
++    if samples.len() <= 2 * SAMPLE_EXCLUDE_COUNT {
++        return TestProfileRange { min: 0, avg: 0, max: 0 };
++    }
+     samples.sort_unstable();
+     let useful_samples = &samples[SAMPLE_EXCLUDE_COUNT .. samples.len() - SAMPLE_EXCLUDE_COUNT];
+     let total_time: u64 = useful_samples.iter().sum();
+-- 
+2.56.0
+
