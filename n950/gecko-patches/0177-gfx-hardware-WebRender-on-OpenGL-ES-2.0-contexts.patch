@@ -1,0 +1,118 @@
+From acab682985e597174465c9e5884110f2177b5fb6 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 21:17:53 +0100
+Subject: [PATCH] gfx: hardware WebRender on OpenGL ES 2.0 contexts
+
+An EGL GLES context for hardware WebRender falls back from ES 3.0 to 2.0
+when the driver has nothing newer (PowerVR SGX530), WebRenderAPI accepts
+GLES 2.0 contexts, and WebRender's GL functions on an ES 2.0 context load
+the ES 3.0 entry points it uses under their OES/EXT names, with
+glInvalidateFramebuffer as glDiscardFramebufferEXT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/gl/GLContextProviderEGL.cpp         |  8 +++++++
+ gfx/webrender_bindings/WebRenderAPI.cpp |  6 ++---
+ gfx/webrender_bindings/src/bindings.rs  | 32 +++++++++++++++++++++++--
+ 3 files changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index 661d9abb8d59..a71b924bbcee 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp
+@@ -905,6 +905,14 @@ RefPtr<GLContextEGL> GLContextEGL::CreateGLContext(
+     if (context) break;
+     NS_WARNING("Failed to create EGLContext with required_attribs");
+ 
++    if (useGles && (flags & CreateContextFlags::PREFER_ES3)) {
++      // OpenGL ES 2.0 only (PowerVR SGX530); WebRender has an ES 2.0 path.
++      GLContextDesc es2Desc = desc;
++      es2Desc.flags &= ~CreateContextFlags::PREFER_ES3;
++      return CreateGLContext(egl, es2Desc, surfaceConfig, surface, useGles,
++                             contextConfig, out_failureId);
++    }
++
+     *out_failureId = "FEATURE_FAILURE_EGL_CREATE"_ns;
+     return nullptr;
+   } while (false);
+diff --git a/gfx/webrender_bindings/WebRenderAPI.cpp b/gfx/webrender_bindings/WebRenderAPI.cpp
+index 41c0092894c6..f446d5864dfe 100644
+--- a/gfx/webrender_bindings/WebRenderAPI.cpp
++++ b/gfx/webrender_bindings/WebRenderAPI.cpp
+@@ -259,13 +259,13 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
+                                   ? renderThread->GetShaders()->RawShaders()
+                                   : nullptr;
+ 
+-        // Check That if we are not using SWGL, we have at least a GL or
+-        // GLES 3.0 context.
++        // Check That if we are not using SWGL, we have at least a GL 3.0 or
++        // GLES 2.0 context (WebRender has an OpenGL ES 2.0 path).
+         if (gl && !swgl) {
+           bool versionCheck =
+               gl->IsAtLeast(gl::ContextProfile::OpenGLCore, 300) ||
+               gl->IsAtLeast(gl::ContextProfile::OpenGLCompatibility, 300) ||
+-              gl->IsAtLeast(gl::ContextProfile::OpenGLES, 300);
++              gl->IsAtLeast(gl::ContextProfile::OpenGLES, 200);
+ 
+           if (!versionCheck) {
+             gfxCriticalNote << "GL context version (" << gl->Version()
+diff --git a/gfx/webrender_bindings/src/bindings.rs b/gfx/webrender_bindings/src/bindings.rs
+index a89cc039eac3..baa9a55f5733 100644
+--- a/gfx/webrender_bindings/src/bindings.rs
++++ b/gfx/webrender_bindings/src/bindings.rs
+@@ -524,6 +524,34 @@ fn get_proc_address(glcontext_ptr: *mut c_void, name: &str) -> *const c_void {
+     symbol as *const _
+ }
+ 
++/// The GLES functions of a current context. An OpenGL ES 2.0 driver
++/// (PowerVR SGX530) offers the ES 3.0 functions WebRender uses only under
++/// their OES or EXT extension names, and discards framebuffer contents
++/// through GL_EXT_discard_framebuffer.
++unsafe fn load_gles_fns(glcontext_ptr: *mut c_void) -> Rc<dyn gl::Gl> {
++    let gl = gl::GlesFns::load_with(|symbol| get_proc_address(glcontext_ptr, symbol));
++    if !gl.get_string(gl::VERSION).starts_with("OpenGL ES 2.") {
++        return gl;
++    }
++    gl::GlesFns::load_with(|symbol| {
++        if symbol == "glInvalidateFramebuffer" {
++            let p = get_proc_address(glcontext_ptr, "glDiscardFramebufferEXT");
++            if !p.is_null() {
++                return p;
++            }
++        }
++        let p = get_proc_address(glcontext_ptr, symbol);
++        if !p.is_null() {
++            return p;
++        }
++        ["OES", "EXT"]
++            .iter()
++            .map(|suffix| get_proc_address(glcontext_ptr, &format!("{}{}", symbol, suffix)))
++            .find(|p| !p.is_null())
++            .unwrap_or(ptr::null())
++    })
++}
++
+ #[repr(C)]
+ pub enum TelemetryProbe {
+     SceneBuildTime = 0,
+@@ -1224,7 +1252,7 @@ fn wr_device_new(gl_context: *mut c_void, pc: Option<&mut WrProgramCache>) -> De
+ 
+     let gl;
+     if unsafe { is_glcontext_gles(gl_context) } {
+-        gl = unsafe { gl::GlesFns::load_with(|symbol| get_proc_address(gl_context, symbol)) };
++        gl = unsafe { load_gles_fns(gl_context) };
+     } else {
+         gl = unsafe { gl::GlFns::load_with(|symbol| get_proc_address(gl_context, symbol)) };
+     }
+@@ -2013,7 +2041,7 @@ pub extern "C" fn wr_window_new(
+             if gl_context.is_null() {
+                 panic!("Native GL context required when not using SWGL!");
+             } else if is_glcontext_gles(gl_context) {
+-                gl::GlesFns::load_with(|symbol| get_proc_address(gl_context, symbol))
++                load_gles_fns(gl_context)
+             } else {
+                 gl::GlFns::load_with(|symbol| get_proc_address(gl_context, symbol))
+             }
+-- 
+2.56.0
+
