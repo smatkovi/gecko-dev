@@ -1,0 +1,180 @@
+From 434c9072a61785903db1b2d69b308c9061e57901 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 16:13:03 +0100
+Subject: [PATCH] wrench: perf separates rasterising, rendering and presenting
+
+- WRENCH_FORCE_RASTER invalidates every picture tile each frame, so a
+  static scene measures rasterising, not only compositing,
+- render_time_ns: render() up to glFinish, apart from presenting,
+- WRENCH_GL_PROFILE: time per GL function, printed per benchmark,
+- WRENCH_NO_VSYNC reports when the swap interval cannot be set.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/main.rs | 38 +++++++++++++++++++++++++++++++++++---
+ gfx/wr/wrench/src/perf.rs | 22 ++++++++++++++++++++++
+ 2 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
+index cac1ec6d5cc8..bd76fe8f2be0 100644
+--- a/gfx/wr/wrench/src/main.rs
++++ b/gfx/wr/wrench/src/main.rs
+@@ -366,7 +366,7 @@ fn make_software_context() -> swgl::Context {
+ 
+ /// WRENCH_GL_RING: the names of the last GL calls, printed on SIGSEGV or
+ /// SIGABRT, to find the call a driver crashes in.
+-mod glring {
++pub mod glring {
+     use gleam::gl;
+     use std::rc::Rc;
+     use std::sync::atomic::{AtomicUsize, Ordering};
+@@ -399,7 +399,35 @@ mod glring {
+         }
+     }
+ 
++    thread_local! {
++        static TOTALS: std::cell::RefCell<std::collections::HashMap<usize, (usize, u32, std::time::Duration)>> =
++            std::cell::RefCell::new(std::collections::HashMap::new());
++    }
++
++    /// WRENCH_GL_PROFILE: time spent in each GL function since the last report.
++    pub fn report() {
++        TOTALS.with(|t| {
++            let mut t = t.borrow_mut();
++            let mut v: Vec<_> = t.drain().collect();
++            v.sort_by(|a, b| (b.1).2.cmp(&(a.1).2));
++            for (ptr, (len, count, total)) in v.into_iter().take(15) {
++                let name = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr as *const u8, len)) };
++                println!("  gl {:32} {:7} calls {:9.2} ms", name, count, total.as_secs_f64() * 1000.0);
++            }
++        });
++    }
++
+     pub fn wrap(fns: Rc<dyn gl::Gl>) -> Rc<dyn gl::Gl> {
++        if std::env::var_os("WRENCH_GL_PROFILE").is_some() {
++            return gl::ProfilingGl::wrap(fns, std::time::Duration::ZERO, |name, d| {
++                TOTALS.with(|t| {
++                    let mut t = t.borrow_mut();
++                    let e = t.entry(name.as_ptr() as usize).or_insert((name.len(), 0, std::time::Duration::ZERO));
++                    e.1 += 1;
++                    e.2 += d;
++                })
++            });
++        }
+         if std::env::var_os("WRENCH_GL_RING").is_none() {
+             return fns;
+         }
+@@ -489,7 +517,9 @@ fn make_window(
+             .set_swap_interval(&gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+             .ok();
+     } else if std::env::var_os("WRENCH_NO_VSYNC").is_some() {
+-        gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait).ok();
++        if let Err(e) = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait) {
++            println!("WRENCH_NO_VSYNC: swap interval 0 not set: {}", e);
++        }
+     }
+ 
+     let gl: Rc<dyn gl::Gl> = glring::wrap(load_gl_fns(is_gles, &gl_display));
+@@ -578,7 +608,9 @@ fn make_window_with_fallback(
+             .set_swap_interval(&gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+             .ok();
+     } else if std::env::var_os("WRENCH_NO_VSYNC").is_some() {
+-        gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait).ok();
++        if let Err(e) = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait) {
++            println!("WRENCH_NO_VSYNC: swap interval 0 not set: {}", e);
++        }
+     }
+ 
+     let gl: Rc<dyn gl::Gl> = glring::wrap(load_gl_fns(is_gles, &gl_display));
+diff --git a/gfx/wr/wrench/src/perf.rs b/gfx/wr/wrench/src/perf.rs
+index 3fb29f842adb..ec862562f098 100644
+--- a/gfx/wr/wrench/src/perf.rs
++++ b/gfx/wr/wrench/src/perf.rs
+@@ -87,6 +87,8 @@ struct TestProfile {
+     paint_time_ns: TestProfileRange,
+     #[serde(default)]
+     frame_time_ns: TestProfileRange,
++    #[serde(default)]
++    render_time_ns: TestProfileRange,
+     draw_calls: usize,
+ }
+ 
+@@ -97,6 +99,7 @@ impl TestProfile {
+         composite_time_ns min, avg, max,\
+         paint_time_ns min, avg, max,\
+         frame_time_ns min, avg, max,\
++        render_time_ns min, avg, max,\
+         draw_calls\n".to_string()
+     }
+ 
+@@ -106,12 +109,14 @@ impl TestProfile {
+                  {},{},{},\
+                  {},{},{},\
+                  {},{},{},\
++                 {},{},{},\
+                  {}\n",
+                 self.name,
+                 self.backend_time_ns.min,   self.backend_time_ns.avg,   self.backend_time_ns.max,
+                 self.composite_time_ns.min, self.composite_time_ns.avg, self.composite_time_ns.max,
+                 self.paint_time_ns.min,     self.paint_time_ns.avg,     self.paint_time_ns.max,
+                 self.frame_time_ns.min,     self.frame_time_ns.avg,     self.frame_time_ns.max,
++                self.render_time_ns.min,    self.render_time_ns.avg,    self.render_time_ns.max,
+                 self.draw_calls)
+     }
+ }
+@@ -210,10 +215,17 @@ impl<'a> PerfHarness<'a> {
+ 
+         let mut debug_flags = DebugFlags::empty();
+         debug_flags.set(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES, true);
++        // WRENCH_FORCE_RASTER: every tile is rasterised again each frame,
++        // not only composited.
++        debug_flags.set(
++            DebugFlags::FORCE_PICTURE_INVALIDATION,
++            std::env::var_os("WRENCH_FORCE_RASTER").is_some(),
++        );
+         self.wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+ 
+         let mut frame_count = 0;
+         let mut frame_times = Vec::new();
++        let mut render_times = Vec::new();
+ 
+         // Without GPU queries (OpenGL ES 2.0) no GPU profiles come.
+         while cpu_frame_profiles.len() < self.sample_count ||
+@@ -223,10 +235,14 @@ impl<'a> PerfHarness<'a> {
+             let frame_start = std::time::Instant::now();
+             reader.do_frame(self.wrench);
+             self.rx.recv().unwrap();
++            let render_start = std::time::Instant::now();
+             self.wrench.render();
++            self.window.gl().finish();
++            let render_time = render_start.elapsed().as_nanos() as u64;
+             self.window.swap_buffers();
+             if frame_count >= self.warmup_frames {
+                 frame_times.push(frame_start.elapsed().as_nanos() as u64);
++                render_times.push(render_time);
+             }
+             let (cpu_profiles, gpu_profiles) = self.wrench.get_frame_profiles();
+             if frame_count >= self.warmup_frames {
+@@ -254,6 +270,11 @@ impl<'a> PerfHarness<'a> {
+         let paint_time_ns = extract_sample(&mut gpu_frame_profiles, |a| a.paint_time_ns);
+         let backend_time_ns = extract_sample(&mut cpu_frame_profiles, |a| a.backend_time_ns);
+         let frame_time_ns = extract_sample(&mut frame_times, |&t| t);
++        let render_time_ns = extract_sample(&mut render_times, |&t| t);
++        if std::env::var_os("WRENCH_GL_PROFILE").is_some() {
++            println!("GL time per function, {:?}:", filename);
++            crate::glring::report();
++        }
+ 
+         TestProfile {
+             name: filename.to_str().unwrap().to_string(),
+@@ -261,6 +282,7 @@ impl<'a> PerfHarness<'a> {
+             paint_time_ns,
+             backend_time_ns,
+             frame_time_ns,
++            render_time_ns,
+             draw_calls,
+         }
+     }
+-- 
+2.56.0
+
