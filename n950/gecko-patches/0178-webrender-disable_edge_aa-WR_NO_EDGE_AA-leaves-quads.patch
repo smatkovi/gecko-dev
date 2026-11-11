@@ -1,0 +1,92 @@
+From 9c0a5cbe6419be926239b4dd333aa20fe8e99417 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 21:32:59 +0100
+Subject: [PATCH] webrender: disable_edge_aa (WR_NO_EDGE_AA) leaves quads
+ without edge anti-aliasing
+
+Transformed quads then use the fast shaders too, at the price of jagged
+edges on rotated content. For GPUs where the anti-aliasing branch costs
+too much (PowerVR SGX530).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/frame_builder.rs | 3 +++
+ gfx/wr/webrender/src/quad.rs          | 4 +++-
+ gfx/wr/webrender/src/renderer/init.rs | 5 +++++
+ gfx/wr/webrender/src/scene.rs         | 1 +
+ 4 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/wr/webrender/src/frame_builder.rs b/gfx/wr/webrender/src/frame_builder.rs
+index e038e7cab334..ef006de00d29 100644
+--- a/gfx/wr/webrender/src/frame_builder.rs
++++ b/gfx/wr/webrender/src/frame_builder.rs
+@@ -72,6 +72,9 @@ pub struct FrameBuilderConfig {
+     pub low_quality_pinch_zoom: bool,
+     pub max_shared_surface_size: i32,
+     pub enable_dithering: bool,
++    /// Quads get no edge anti-aliasing, even when transformed: jagged edges
++    /// on rotated content, for GPUs where it costs too much (WR_NO_EDGE_AA).
++    pub disable_edge_aa: bool,
+ }
+ 
+ /// A set of default / global resources that are re-built each frame.
+diff --git a/gfx/wr/webrender/src/quad.rs b/gfx/wr/webrender/src/quad.rs
+index 68d9c1e6aa6e..876cb021f606 100644
+--- a/gfx/wr/webrender/src/quad.rs
++++ b/gfx/wr/webrender/src/quad.rs
+@@ -660,7 +660,9 @@ fn prepare_quad_impl(
+         quad_flags |= QuadFlags::APPLY_RENDER_TASK_CLIP;
+     }
+ 
+-    let aa_flags = if prim_is_2d_axis_aligned {
++    let aa_flags = if ctx.fb_config.disable_edge_aa {
++        EdgeMask::empty()
++    } else if prim_is_2d_axis_aligned {
+         aligned_aa_edges
+     } else {
+         transfomed_aa_edges
+diff --git a/gfx/wr/webrender/src/renderer/init.rs b/gfx/wr/webrender/src/renderer/init.rs
+index d0977161c556..c6c1c0e7c566 100644
+--- a/gfx/wr/webrender/src/renderer/init.rs
++++ b/gfx/wr/webrender/src/renderer/init.rs
+@@ -123,6 +123,9 @@ pub struct WebRenderOptions {
+     pub use_optimized_shaders: bool,
+     pub enable_aa: bool,
+     pub enable_dithering: bool,
++    /// No edge anti-aliasing on quads (also set by the WR_NO_EDGE_AA
++    /// environment variable).
++    pub disable_edge_aa: bool,
+     pub max_recorded_profiles: usize,
+     pub precache_flags: ShaderPrecacheFlags,
+     /// Enable sub-pixel anti-aliasing if a fast implementation is available.
+@@ -229,6 +232,7 @@ impl Default for WebRenderOptions {
+             use_optimized_shaders: false,
+             enable_aa: true,
+             enable_dithering: false,
++            disable_edge_aa: false,
+             debug_flags: DebugFlags::empty(),
+             max_recorded_profiles: 0,
+             precache_flags: ShaderPrecacheFlags::empty(),
+@@ -559,6 +563,7 @@ pub fn create_webrender_instance(
+         low_quality_pinch_zoom: options.low_quality_pinch_zoom,
+         max_shared_surface_size: options.max_shared_surface_size,
+         enable_dithering: options.enable_dithering,
++        disable_edge_aa: options.disable_edge_aa || std::env::var_os("WR_NO_EDGE_AA").is_some(),
+     };
+     info!("WR {:?}", config);
+ 
+diff --git a/gfx/wr/webrender/src/scene.rs b/gfx/wr/webrender/src/scene.rs
+index 4d7be26aa776..b9fe5ef8afd7 100644
+--- a/gfx/wr/webrender/src/scene.rs
++++ b/gfx/wr/webrender/src/scene.rs
+@@ -328,6 +328,7 @@ impl BuiltScene {
+                 low_quality_pinch_zoom: false,
+                 max_shared_surface_size: 2048,
+                 enable_dithering: false,
++                disable_edge_aa: false,
+             },
+         }
+     }
+-- 
+2.56.0
+
