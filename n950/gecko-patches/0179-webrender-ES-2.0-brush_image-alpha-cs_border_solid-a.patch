@@ -1,0 +1,232 @@
+From 16bc1cd465dc2c7c18ad80fdf2d0f5e3690dd523 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:14:18 +0100
+Subject: [PATCH] webrender: ES 2.0 brush_image (alpha), cs_border_solid and
+ cs_blur compile on the SGX530
+
+The SGX530 has 8 varying vectors and packs varyings less tightly than
+GLSL ES 1.00 allows: brush_image's alpha pass (11 varyings, 32 components)
+and cs_border_solid (36 components) failed with "Failed to allocate
+varyings". On ES 2.0, brush shaders with v_local_pos share a vector
+between it and vClipMaskUv, brush_image's alpha pass packs its two-
+component varyings in pairs, and cs_border_solid interpolates the
+distance to the colour line (affine in the position) next to the position
+and mix mode instead of passing the line. cs_blur used an integer min()
+and a loop bounded by a varying, neither of which GLSL ES 1.00 has.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/brush.glsl           |  5 +++
+ gfx/wr/webrender/res/brush_image.glsl     | 16 +++++++++-
+ gfx/wr/webrender/res/cs_blur.glsl         |  9 ++++++
+ gfx/wr/webrender/res/cs_border_solid.glsl | 38 +++++++++++++++++++++--
+ gfx/wr/webrender/res/prim_shared.glsl     |  7 +++++
+ 5 files changed, 71 insertions(+), 4 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/brush.glsl b/gfx/wr/webrender/res/brush.glsl
+index 7808cedb6c9a..965a905f6592 100644
+--- a/gfx/wr/webrender/res/brush.glsl
++++ b/gfx/wr/webrender/res/brush.glsl
+@@ -47,8 +47,13 @@
+ ///
+ 
+ #if (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
++#if __VERSION__ == 100 && !defined(SWGL_CLIP_MASK)
++// shares a vector with vClipMaskUv (prim_shared.glsl)
++#define v_local_pos v_clip_mask_uv_local_pos.zw
++#else
+ varying highp vec2 v_local_pos;
+ #endif
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+diff --git a/gfx/wr/webrender/res/brush_image.glsl b/gfx/wr/webrender/res/brush_image.glsl
+index 1e2f93118d78..6f86cc59decf 100644
+--- a/gfx/wr/webrender/res/brush_image.glsl
++++ b/gfx/wr/webrender/res/brush_image.glsl
+@@ -6,6 +6,17 @@
+ 
+ #include shared,prim_shared,brush,image_source
+ 
++#if __VERSION__ == 100 && defined(WR_FEATURE_ALPHA_PASS)
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, packed less tightly than
++// GLSL ES 1.00 allows): two-component varyings share vectors.
++varying highp vec4 v_uv_mask_swizzle;
++#define v_uv v_uv_mask_swizzle.xy
++#define v_mask_swizzle v_uv_mask_swizzle.zw
++varying mediump vec4 v_tile_repeat_bounds_perspective;
++#define v_tile_repeat_bounds v_tile_repeat_bounds_perspective.xy
++#define v_perspective v_tile_repeat_bounds_perspective.zw
++flat varying mediump vec4 v_color;
++#else
+ // Interpolated UV coordinates to sample.
+ varying highp vec2 v_uv;
+ 
+@@ -14,6 +25,7 @@ flat varying mediump vec4 v_color;
+ flat varying mediump vec2 v_mask_swizzle;
+ flat varying mediump vec2 v_tile_repeat_bounds;
+ #endif
++#endif
+ 
+ // Normalized bounds of the source image in the texture.
+ flat varying highp vec4 v_uv_bounds;
+@@ -21,9 +33,11 @@ flat varying highp vec4 v_uv_bounds;
+ // sampling artifacts.
+ flat varying highp vec4 v_uv_sample_bounds;
+ 
++#if !(__VERSION__ == 100 && defined(WR_FEATURE_ALPHA_PASS))
+ // Flag to allow perspective interpolation of UV.
+ // Packed in to vector to work around bug 1630356.
+ flat varying mediump vec2 v_perspective;
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+@@ -168,7 +182,7 @@ void brush_vs(
+     }
+ 
+     float perspective_interpolate = WR_HAS_FLAG(brush_flags, BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) ? 1.0 : 0.0;
+-    v_perspective.x = perspective_interpolate;
++    v_perspective = vec2(perspective_interpolate, 0.0);
+ 
+     // We deliberately only support the normalized UVs flag when *not* using
+     // repetition, as the presence of this code resulted in a miscompilation
+diff --git a/gfx/wr/webrender/res/cs_blur.glsl b/gfx/wr/webrender/res/cs_blur.glsl
+index 1e73179ff3e8..e59efc9c8f29 100644
+--- a/gfx/wr/webrender/res/cs_blur.glsl
++++ b/gfx/wr/webrender/res/cs_blur.glsl
+@@ -184,8 +184,17 @@ void main(void) {
+     // Clamp loop condition variable to a statically known value to workaround
+     // driver bug on Adreno 3xx. vSupport should not exceed 300 anyway, due to
+     // the max blur radius being 100. See bug 1720841 for details.
++#if __VERSION__ == 100
++    // GLSL ES 1.00: no integer min(), and loops run to a constant bound.
++    int support = vSupport.x;
++    for (int i = 1; i <= 300; i += 2) {
++        if (i > support) {
++            break;
++        }
++#else
+     int support = min(vSupport.x, 300);
+     for (int i = 1; i <= support; i += 2) {
++#endif
+         gauss_coefficient.xy *= gauss_coefficient.yz;
+ 
+         float gauss_coefficient_subtotal = gauss_coefficient.x;
+diff --git a/gfx/wr/webrender/res/cs_border_solid.glsl b/gfx/wr/webrender/res/cs_border_solid.glsl
+index c690a65ee0b6..b4032af5935e 100644
+--- a/gfx/wr/webrender/res/cs_border_solid.glsl
++++ b/gfx/wr/webrender/res/cs_border_solid.glsl
+@@ -13,6 +13,13 @@
+ flat varying mediump vec4 vColor0;
+ flat varying mediump vec4 vColor1;
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors): the local position, the mix
++// mode, and the distance to the line where the edge transition occurs,
++// which is affine in the position and so interpolates exactly.
++varying highp vec4 vPos_MixColors_LineDistance;
++#define vPos vPos_MixColors_LineDistance.xy
++#else
+ // A point + tangent defining the line where the edge
+ // transition occurs. Used for corners only.
+ flat varying highp vec4 vColorLine;
+@@ -20,6 +27,7 @@ flat varying highp vec4 vColorLine;
+ // A boolean indicating that we should be mixing between edge colors.
+ // Packed in to a vector to work around bug 1630356.
+ flat varying mediump ivec2 vMixColors;
++#endif
+ 
+ // xy = Local space position of the clip center.
+ // zw = Scale the rect origin by this to get the outer
+@@ -32,12 +40,18 @@ flat varying highp vec4 vClipRadii;
+ 
+ // Position, scale, and radii of horizontally and vertically adjacent corner clips.
+ flat varying highp vec4 vHorizontalClipCenter_Sign;
+-flat varying highp vec2 vHorizontalClipRadii;
+ flat varying highp vec4 vVerticalClipCenter_Sign;
++#if __VERSION__ == 100
++varying highp vec4 vHorizontalVerticalClipRadii;
++#define vHorizontalClipRadii vHorizontalVerticalClipRadii.xy
++#define vVerticalClipRadii vHorizontalVerticalClipRadii.zw
++#else
++flat varying highp vec2 vHorizontalClipRadii;
+ flat varying highp vec2 vVerticalClipRadii;
+ 
+ // Local space position
+ varying highp vec2 vPos;
++#endif
+ 
+ #define SEGMENT_TOP_LEFT        0
+ #define SEGMENT_TOP_RIGHT       1
+@@ -97,14 +111,23 @@ void main(void) {
+         }
+     }
+ 
++#if __VERSION__ == 100
++    vPos_MixColors_LineDistance.z = float(mix_colors);
++#else
+     vMixColors.x = mix_colors;
++#endif
+     vPos = size * aPosition.xy;
+ 
+     vColor0 = aColor0;
+     vColor1 = aColor1;
+     vClipCenter_Sign = vec4(outer + clip_sign * aRadii, clip_sign);
+     vClipRadii = vec4(aRadii, max(aRadii - aWidths, 0.0));
++#if __VERSION__ == 100
++    vec2 color_line_perp = vec2(aWidths.y * -clip_sign.y, aWidths.x * clip_sign.x);
++    vPos_MixColors_LineDistance.w = dot(normalize(color_line_perp), outer - vPos);
++#else
+     vColorLine = vec4(outer, aWidths.y * -clip_sign.y, aWidths.x * clip_sign.x);
++#endif
+ 
+     vec2 horizontal_clip_sign = vec2(-clip_sign.x, clip_sign.y);
+     vHorizontalClipCenter_Sign = vec4(aClipParams1.xy +
+@@ -125,11 +148,20 @@ void main(void) {
+ #ifdef WR_FRAGMENT_SHADER
+ void main(void) {
+     float aa_range = compute_aa_range(vPos);
+-    bool do_aa = vMixColors.x != MIX_NO_AA;
++#if __VERSION__ == 100
++    int mix_colors = int(floor(vPos_MixColors_LineDistance.z + 0.5));
++#else
++    int mix_colors = vMixColors.x;
++#endif
++    bool do_aa = mix_colors != MIX_NO_AA;
+ 
+     float mix_factor = 0.0;
+-    if (vMixColors.x != DONT_MIX) {
++    if (mix_colors != DONT_MIX) {
++#if __VERSION__ == 100
++        float d_line = vPos_MixColors_LineDistance.w;
++#else
+         float d_line = distance_to_line(vColorLine.xy, vColorLine.zw, vPos);
++#endif
+         if (do_aa) {
+             mix_factor = distance_aa(aa_range, -d_line);
+         } else {
+diff --git a/gfx/wr/webrender/res/prim_shared.glsl b/gfx/wr/webrender/res/prim_shared.glsl
+index 70732bdec051..819d5f93864c 100644
+--- a/gfx/wr/webrender/res/prim_shared.glsl
++++ b/gfx/wr/webrender/res/prim_shared.glsl
+@@ -19,8 +19,15 @@ uniform sampler2D sClipMask;
+ #ifndef SWGL_CLIP_MASK
+ // TODO: convert back to RectWithEndpoint if driver issues are resolved, if ever.
+ flat varying mediump vec4 vClipMaskUvBounds;
++#if __VERSION__ == 100 && defined(VECS_PER_SPECIFIC_BRUSH) && (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, packed less tightly than
++// GLSL ES 1.00 allows): zw carries brush.glsl's v_local_pos.
++varying highp vec4 v_clip_mask_uv_local_pos;
++#define vClipMaskUv v_clip_mask_uv_local_pos.xy
++#else
+ varying highp vec2 vClipMaskUv;
+ #endif
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-- 
+2.56.0
+
