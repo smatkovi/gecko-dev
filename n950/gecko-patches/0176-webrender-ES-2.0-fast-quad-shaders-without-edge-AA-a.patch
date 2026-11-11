@@ -1,0 +1,335 @@
+From 54c6dc5e4436eb0736b8f905c96c472c8e1d25ea Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 20:55:13 +0100
+Subject: [PATCH] webrender: ES 2.0 fast quad shaders without edge AA, and for
+ two-stop linear gradients
+
+The PowerVR SGX530's compiler pays for branches a fragment never takes:
+solid rectangles cost 84 ms a frame with the general ps_quad shader and
+30 ms without its anti-aliasing branch, which they never enter. On ES 2.0,
+alpha batches whose quads need neither edge anti-aliasing nor mask output
+now use ps_quad_textured with NO_AA, and clamped linear gradients with two
+stops use ps_quad_gradient with FAST_PATH and NO_AA, whose vertex shader
+computes the stop factor so the fragment shader only clamps and mixes.
+BatchFeatures::QUAD_SLOW_PATH marks batches that need the general shader;
+render target quads keep it. Images are unchanged on the PC (strict ES 2.0
+reftests and benchmark images bit-identical).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/ps_quad.glsl             | 17 +++++++-
+ gfx/wr/webrender/res/ps_quad_gradient.glsl    | 15 +++++++
+ gfx/wr/webrender/src/batch.rs                 | 19 ++++++--
+ gfx/wr/webrender/src/pattern/gradient.rs      |  7 ++-
+ gfx/wr/webrender/src/renderer/shade.rs        | 43 ++++++++++++++++++-
+ gfx/wr/webrender_build/src/shader_features.rs | 14 +++++-
+ 6 files changed, 106 insertions(+), 9 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/ps_quad.glsl b/gfx/wr/webrender/res/ps_quad.glsl
+index 84e3c2bf0c07..727f57511ff1 100644
+--- a/gfx/wr/webrender/res/ps_quad.glsl
++++ b/gfx/wr/webrender/res/ps_quad.glsl
+@@ -56,15 +56,24 @@ varying highp vec4 v_local_pos_flags;
+ // zero: not every shader writes every component, and an unwritten global
+ // is undefined in GLSL ES (the SGX530 leaves garbage there)
+ ivec4 v_flags = ivec4(0);
++#ifdef WR_FEATURE_NO_AA
++#define WR_VS_FINISH \
++    v_local_pos_flags.z = float(v_flags.x);
++#else
+ #define WR_VS_FINISH \
+     v_local_pos_flags.z = float(v_flags.z + 2 * v_flags.w + 4 * v_flags.x + 1024 * v_flags.y);
++#endif
+ #else
+ // unpacked once per fragment, at the start of main()
+ ivec4 v_flags;
+ void wr_unpack_quad_flags() {
+     float f = floor(v_local_pos_flags.z + 0.5);
++#ifdef WR_FEATURE_NO_AA
++    v_flags = ivec4(int(f), 0, 0, 0);
++#else
+     v_flags = ivec4(mod(floor(f / 4.0), 256.0), floor(f / 1024.0),
+                     mod(f, 2.0), mod(floor(f / 2.0), 2.0));
++#endif
+ }
+ #endif
+ #else
+@@ -403,7 +412,9 @@ float edge_no_aa_offset(int edge, int flags) {
+ }
+ 
+ void antialiasing_vertex(PrimitiveInfo prim) {
+-#ifndef SWGL_ANTIALIAS
++#ifdef WR_FEATURE_NO_AA
++    vLocalPos = prim.local_pos;
++#elif !defined(SWGL_ANTIALIAS)
+     // This does the setup that is required for init_tranform_vs.
+ 
+     // The "transform bounds" define the edges along which anti-aliasing
+@@ -451,7 +462,7 @@ vec4 pattern_fragment(vec4 base_color);
+ 
+ float antialiasing_fragment() {
+     float alpha = 1.0;
+-#ifndef SWGL_ANTIALIAS
++#if !defined(SWGL_ANTIALIAS) && !defined(WR_FEATURE_NO_AA)
+     if (v_flags_has_edge_mask != 0) {
+         alpha = rectangle_aa_fragment(vLocalPos);
+     }
+@@ -467,9 +478,11 @@ void main() {
+     base_color *= antialiasing_fragment();
+     vec4 output_color = pattern_fragment(base_color);
+ 
++#ifndef WR_FEATURE_NO_AA
+     if (v_flags_is_mask != 0) {
+         output_color = output_color.rrrr;
+     }
++#endif
+ 
+     oFragColor = output_color;
+ }
+diff --git a/gfx/wr/webrender/res/ps_quad_gradient.glsl b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+index 75e4da7947f8..163bcf6a6e1b 100644
+--- a/gfx/wr/webrender/res/ps_quad_gradient.glsl
++++ b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+@@ -152,6 +152,15 @@ void pattern_vertex(PrimitiveInfo info) {
+         v_color0 = colors[0];
+         v_color1 = colors[1];
+     }
++
++#ifdef WR_FEATURE_FAST_PATH
++    // A clamped linear gradient with two stops: the stop interpolation
++    // factor is affine in the position, so it is interpolated as is.
++    vec4 stops = fetch_from_gpu_buffer_1f(offsets_addrs);
++    float d = stops.y - stops.x;
++    float offset = dot(v_interpolated_data.xy, v_flat_data.xy) - v_flat_data.z + 0.000001;
++    v_interpolated_data.z = (offset - stops.x) * (d > 0.0 ? 1.0 / d : 1.0e20);
++#endif
+ }
+ 
+ #endif
+@@ -344,6 +353,11 @@ float conic_gradient_fragment() {
+     return fract(current_angle / (2.0 * PI)) * offset_scale - start_offset;
+ }
+ 
++#ifdef WR_FEATURE_FAST_PATH
++vec4 pattern_fragment(vec4 color) {
++    return dither(color * mix(v_color0, v_color1, clamp(v_interpolated_data.z, 0.0, 1.0)));
++}
++#else
+ vec4 pattern_fragment(vec4 color) {
+ 
+     float offset = 0.0;
+@@ -371,6 +385,7 @@ vec4 pattern_fragment(vec4 color) {
+ 
+     return dither(color);
+ }
++#endif
+ 
+ #if defined(SWGL_DRAW_SPAN)
+ void swgl_drawSpanRGBA8() {
+diff --git a/gfx/wr/webrender/src/batch.rs b/gfx/wr/webrender/src/batch.rs
+index 3a15c9f6aa3f..35cd07c6610d 100644
+--- a/gfx/wr/webrender/src/batch.rs
++++ b/gfx/wr/webrender/src/batch.rs
+@@ -6,9 +6,10 @@ use api::{AlphaType, ClipMode, ImageBufferKind};
+ use api::{FontInstanceFlags, YuvColorSpace, YuvFormat, ColorDepth, ColorRange, PremultipliedColorF};
+ use api::units::*;
+ use crate::clip::{clamped_radius, ClipNodeFlags, ClipNodeRange, ClipItemKind, ClipStore};
+-use crate::command_buffer::PrimitiveCommand;
++use crate::command_buffer::{PrimitiveCommand, QuadFlags};
+ use crate::composite::CompositorSurfaceKind;
+ use crate::pattern::PatternKind;
++use crate::pattern::gradient::GRADIENT_FAST_PATH;
+ use crate::spatial_tree::{SpatialTree, SpatialNodeIndex, CoordinateSystemId};
+ use glyph_rasterizer::{GlyphFormat, SubpixelDirection};
+ use crate::gpu_types::{BrushFlags, BrushInstance, ImageSource, PrimitiveHeaders, UvRectKind, ZBufferId, ZBufferIdGenerator};
+@@ -525,6 +526,10 @@ bitflags! {
+         const REPETITION = 1 << 2;
+         /// Indicates a primitive in this batch may use a clip mask.
+         const CLIP_MASK = 1 << 3;
++        /// A quad in this batch needs the general quad shader: edge
++        /// anti-aliasing, mask output, or a gradient other than a clamped
++        /// linear one with two stops. Without it, ES 2.0 uses fast variants.
++        const QUAD_SLOW_PATH = 1 << 4;
+     }
+ }
+ 
+@@ -842,6 +847,14 @@ impl BatchBuilder {
+             }
+             PrimitiveCommand::Quad { pattern, pattern_input, draw_index, gpu_buffer_address, quad_flags, edge_flags, transform_id, src_color_task_id, blend_mode } => {
+                 let prim_info = &ctx.scratch.frame.draws[draw_index.0 as usize];
++                let quad_features = if !edge_flags.is_empty()
++                    || quad_flags.contains(QuadFlags::IS_MASK)
++                    || (*pattern == PatternKind::Gradient && pattern_input.1 != GRADIENT_FAST_PATH)
++                {
++                    BatchFeatures::QUAD_SLOW_PATH
++                } else {
++                    BatchFeatures::empty()
++                };
+                 let bounding_rect = &prim_info.clip_chain.pic_coverage_rect;
+                 let render_task_address = self.batcher.render_task_address;
+ 
+@@ -865,7 +878,7 @@ impl BatchBuilder {
+                         |key, instance| {
+                             let batch = self.batcher.set_params_and_get_batch(
+                                 key,
+-                                BatchFeatures::empty(),
++                                quad_features,
+                                 bounding_rect,
+                                 z_id,
+                             );
+@@ -896,7 +909,7 @@ impl BatchBuilder {
+                             |key, instance| {
+                                 let batch = self.batcher.set_params_and_get_batch(
+                                     key,
+-                                    BatchFeatures::empty(),
++                                    quad_features,
+                                     bounding_rect,
+                                     z_id,
+                                 );
+diff --git a/gfx/wr/webrender/src/pattern/gradient.rs b/gfx/wr/webrender/src/pattern/gradient.rs
+index 590c517f80d1..2fa62467d66a 100644
+--- a/gfx/wr/webrender/src/pattern/gradient.rs
++++ b/gfx/wr/webrender/src/pattern/gradient.rs
+@@ -15,6 +15,10 @@ pub enum GradientKind {
+     Conic = 2,
+ }
+ 
++/// PatternShaderInput.1 of a clamped linear gradient with two stops, which
++/// ES 2.0 draws with the fast ps_quad_gradient variant.
++pub const GRADIENT_FAST_PATH: i32 = 1;
++
+ pub fn linear_gradient_pattern(
+     start: LayoutPoint,
+     end: LayoutPoint,
+@@ -41,12 +45,13 @@ pub fn linear_gradient_pattern(
+     let is_opaque = write_gpu_gradient_stops_tree(stops, GradientKind::Linear, extend_mode, &mut writer);
+ 
+     let gradient_address = writer.finish();
++    let fast_path = stops.len() == 2 && extend_mode == ExtendMode::Clamp;
+ 
+     Pattern {
+         kind: PatternKind::Gradient,
+         shader_input: PatternShaderInput(
+             gradient_address.as_int(),
+-            0,
++            if fast_path { GRADIENT_FAST_PATH } else { 0 },
+         ),
+         texture_input: PatternTextureInput::default(),
+         base_color: ColorF::WHITE,
+diff --git a/gfx/wr/webrender/src/renderer/shade.rs b/gfx/wr/webrender/src/renderer/shade.rs
+index e3b189ad996c..5911a4c7d200 100644
+--- a/gfx/wr/webrender/src/renderer/shade.rs
++++ b/gfx/wr/webrender/src/renderer/shade.rs
+@@ -626,6 +626,11 @@ pub struct Shaders {
+     ps_quad_textured_rect: Option<ShaderHandle>,
+     ps_quad_repeat: ShaderHandle,
+     ps_quad_gradient: ShaderHandle,
++    // ES 2.0 only: variants without edge anti-aliasing or mask output, and a
++    // linear two-stop gradient, for batches without BatchFeatures::QUAD_SLOW_PATH.
++    // The SGX530's compiler pays for the general shaders' unused branches.
++    ps_quad_textured_fast: Option<ShaderHandle>,
++    ps_quad_gradient_fast: Option<ShaderHandle>,
+     ps_quad_box_shadow: ShaderHandle,
+     ps_mask: ShaderHandle,
+     ps_mask_fast: ShaderHandle,
+@@ -874,6 +879,32 @@ impl Shaders {
+             &shader_list,
+         )?;
+ 
++        let is_gles2 = device.get_capabilities().is_gles2;
++        let ps_quad_textured_fast = if is_gles2 {
++            Some(loader.create_shader(
++                ShaderKind::Primitive,
++                "ps_quad_textured",
++                &["NO_AA", "TEXTURE_2D"],
++                &shader_list,
++            )?)
++        } else {
++            None
++        };
++        let ps_quad_gradient_fast = if is_gles2 {
++            Some(loader.create_shader(
++                ShaderKind::Primitive,
++                "ps_quad_gradient",
++                if options.enable_dithering {
++                   &[DITHERING_FEATURE, "FAST_PATH", "NO_AA"]
++                } else {
++                   &["FAST_PATH", "NO_AA"]
++                },
++                &shader_list,
++            )?)
++        } else {
++            None
++        };
++
+         let ps_quad_box_shadow = loader.create_shader(
+             ShaderKind::Primitive,
+             "ps_quad_box_shadow",
+@@ -1052,6 +1083,8 @@ impl Shaders {
+             ps_quad_textured_rect,
+             ps_quad_repeat,
+             ps_quad_gradient,
++            ps_quad_textured_fast,
++            ps_quad_gradient_fast,
+             ps_quad_box_shadow,
+             ps_mask,
+             ps_mask_fast,
+@@ -1151,7 +1184,10 @@ impl Shaders {
+     ) -> ShaderHandle {
+         match key.kind {
+             BatchKind::Quad(PatternKind::ColorOrTexture) => {
+-                self.ps_quad_textured
++                match self.ps_quad_textured_fast {
++                    Some(fast) if !features.contains(BatchFeatures::QUAD_SLOW_PATH) => fast,
++                    _ => self.ps_quad_textured,
++                }
+             }
+             BatchKind::Quad(PatternKind::TextureExternal) => {
+                 self.ps_quad_textured_external
+@@ -1166,7 +1202,10 @@ impl Shaders {
+                     .expect("bug: ps_quad_textured TEXTURE_RECT variant not loaded")
+             }
+             BatchKind::Quad(PatternKind::Gradient) => {
+-                self.ps_quad_gradient
++                match self.ps_quad_gradient_fast {
++                    Some(fast) if !features.contains(BatchFeatures::QUAD_SLOW_PATH) => fast,
++                    _ => self.ps_quad_gradient,
++                }
+             }
+             BatchKind::Quad(PatternKind::Repeat) => {
+                 self.ps_quad_repeat
+diff --git a/gfx/wr/webrender_build/src/shader_features.rs b/gfx/wr/webrender_build/src/shader_features.rs
+index b9621123b428..06489ba6d6dd 100644
+--- a/gfx/wr/webrender_build/src/shader_features.rs
++++ b/gfx/wr/webrender_build/src/shader_features.rs
+@@ -224,6 +224,11 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
+     if flags.contains(ShaderFeatureFlags::TEXTURE_EXTERNAL_BT709) {
+         ps_quad_textured_features.push("TEXTURE_EXTERNAL_BT709".to_string());
+     }
++    // Quads without edge anti-aliasing or mask output, and linear two-stop
++    // gradients; ES 2.0 devices only (see BatchFeatures::QUAD_SLOW_PATH).
++    if flags.contains(ShaderFeatureFlags::GLES) {
++        ps_quad_textured_features.push("NO_AA,TEXTURE_2D".to_string());
++    }
+     shaders.insert("ps_quad_textured", ps_quad_textured_features);
+ 
+     shaders.insert("ps_quad_repeat", vec![base_prim_features.finish()]);
+@@ -235,7 +240,14 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
+         maybe_dithering.add("DITHERING");
+     }
+ 
+-    shaders.insert("ps_quad_gradient", vec![base_prim_features.concat(&maybe_dithering).finish()]);
++    let mut ps_quad_gradient_features = vec![base_prim_features.concat(&maybe_dithering).finish()];
++    if flags.contains(ShaderFeatureFlags::GLES) {
++        let mut fast = base_prim_features.concat(&maybe_dithering);
++        fast.add("FAST_PATH");
++        fast.add("NO_AA");
++        ps_quad_gradient_features.push(fast.finish());
++    }
++    shaders.insert("ps_quad_gradient", ps_quad_gradient_features);
+ 
+     shaders.insert("ps_clear", vec![base_prim_features.finish()]);
+ 
+-- 
+2.56.0
+
