@@ -1,0 +1,182 @@
+From ee0eae9eb1f262eb281485a80efe366e43bc3a44 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:10:55 +0100
+Subject: [PATCH 151/156] webrender: detect OpenGL ES 2.0 contexts,
+ ShaderVersion::Gles2
+
+First step towards WebRender on OpenGL ES 2.0 GPUs (PowerVR SGX5xx):
+an ES 2.x context ("OpenGL ES 2." in GL_VERSION) is detected without
+GL_MAJOR_VERSION, its extensions are read from glGetString(GL_EXTENSIONS)
+since it has no glGetStringi, Capabilities::is_gles2 records it, and its
+shaders are GLSL ES 1.00 (#version 100, with WR_GLES2 defined for the
+ES 2.0 data paths).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/build.rs            |  1 +
+ gfx/wr/webrender/src/device/gl.rs    | 49 ++++++++++++++++++++--------
+ gfx/wr/webrender_build/src/shader.rs | 11 +++++++
+ 3 files changed, 48 insertions(+), 13 deletions(-)
+
+diff --git a/gfx/wr/webrender/build.rs b/gfx/wr/webrender/build.rs
+index 1a1d2ac46a9a..96da0e8f72c7 100644
+--- a/gfx/wr/webrender/build.rs
++++ b/gfx/wr/webrender/build.rs
+@@ -171,6 +171,7 @@ fn write_optimized_shaders(
+             let target = match shader.gl_version {
+                 ShaderVersion::Gl => glslopt::Target::OpenGl,
+                 ShaderVersion::Gles => glslopt::Target::OpenGles30,
++                ShaderVersion::Gles2 => glslopt::Target::OpenGles20,
+             };
+             let glslopt_ctx = glslopt::Context::new(target);
+ 
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index a8d05508065c..832a3fa0f0a6 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -266,13 +266,20 @@ fn supports_extension(extensions: &[String], extension: &str) -> bool {
+     extensions.iter().any(|s| s == extension)
+ }
+ 
+-fn get_shader_version(gl: &dyn gl::Gl) -> ShaderVersion {
++fn get_shader_version(gl: &dyn gl::Gl, is_gles2: bool) -> ShaderVersion {
+     match gl.get_type() {
+         gl::GlType::Gl => ShaderVersion::Gl,
++        gl::GlType::Gles if is_gles2 => ShaderVersion::Gles2,
+         gl::GlType::Gles => ShaderVersion::Gles,
+     }
+ }
+ 
++/// An OpenGL ES 2.x context ("OpenGL ES 2.0 ..." in GL_VERSION), which has
++/// no GL_MAJOR_VERSION, no glGetStringi and none of ES 3.0's features.
++fn is_gles2_context(gl: &dyn gl::Gl, version_string: &str) -> bool {
++    gl.get_type() == gl::GlType::Gles && version_string.starts_with("OpenGL ES 2.")
++}
++
+ // Get an unoptimized shader string by name, from the built in resources or
+ // an override path, if supplied.
+ pub fn get_unoptimized_shader_source(shader_name: &str, base_path: Option<&PathBuf>) -> Cow<'static, str> {
+@@ -767,7 +774,7 @@ impl ProgramSourceInfo {
+ 
+         // Setup.
+         let mut hasher = DefaultHasher::new();
+-        let gl_version = get_shader_version(&*device.gl());
++        let gl_version = get_shader_version(&*device.gl(), device.capabilities.is_gles2);
+ 
+         // Hash the renderer name.
+         hasher.write(device.capabilities.renderer_name.as_bytes());
+@@ -1032,6 +1039,9 @@ impl UniformLocation {
+ 
+ #[derive(Debug)]
+ pub struct Capabilities {
++    /// An OpenGL ES 2.0 context: GLSL ES 1.00 shaders, no instancing, no
++    /// integer textures or attributes, no pixel buffer objects.
++    pub is_gles2: bool,
+     /// Whether multisampled render targets are supported.
+     pub supports_multisampling: bool,
+     /// Whether the function `glCopyImageSubData` is available.
+@@ -1572,14 +1582,22 @@ impl Device {
+         info!("Version: {}", version_string);
+         info!("Max texture size: {}", max_texture_size);
+ 
+-        let mut extension_count = [0];
+-        unsafe {
+-            gl.get_integer_v(gl::NUM_EXTENSIONS, &mut extension_count);
+-        }
+-        let extension_count = extension_count[0] as gl::GLuint;
++        let is_gles2 = is_gles2_context(&*gl, &version_string);
+         let mut extensions = Vec::new();
+-        for i in 0 .. extension_count {
+-            extensions.push(gl.get_string_i(gl::EXTENSIONS, i));
++        if is_gles2 {
++            // ES 2.0 has no indexed extension query
++            extensions.extend(
++                gl.get_string(gl::EXTENSIONS).split_whitespace().map(String::from),
++            );
++        } else {
++            let mut extension_count = [0];
++            unsafe {
++                gl.get_integer_v(gl::NUM_EXTENSIONS, &mut extension_count);
++            }
++            let extension_count = extension_count[0] as gl::GLuint;
++            for i in 0 .. extension_count {
++                extensions.push(gl.get_string_i(gl::EXTENSIONS, i));
++            }
+         }
+ 
+         // We block this on Mali Valhall GPUs as the extension's functions always return
+@@ -1652,9 +1670,13 @@ impl Device {
+         let is_emulator = renderer_name.starts_with("Android Emulator");
+         let avoid_tex_image = is_emulator;
+         let mut gl_version = [0; 2];
+-        unsafe {
+-            gl.get_integer_v(gl::MAJOR_VERSION, &mut gl_version[0..1]);
+-            gl.get_integer_v(gl::MINOR_VERSION, &mut gl_version[1..2]);
++        if is_gles2 {
++            gl_version = [2, 0];
++        } else {
++            unsafe {
++                gl.get_integer_v(gl::MAJOR_VERSION, &mut gl_version[0..1]);
++                gl.get_integer_v(gl::MINOR_VERSION, &mut gl_version[1..2]);
++            }
+         }
+         info!("GL context {:?} {}.{}", gl.get_type(), gl_version[0], gl_version[1]);
+ 
+@@ -2005,6 +2027,7 @@ impl Device {
+             inside_frame: false,
+ 
+             capabilities: Capabilities {
++                is_gles2,
+                 supports_multisampling: false, //TODO
+                 supports_copy_image_sub_data,
+                 supports_color_buffer_float,
+@@ -3188,7 +3211,7 @@ impl Device {
+         output: F,
+     ) {
+         do_build_shader_string(
+-            get_shader_version(&*self.gl),
++            get_shader_version(&*self.gl, self.capabilities.is_gles2),
+             features,
+             kind,
+             base_filename,
+diff --git a/gfx/wr/webrender_build/src/shader.rs b/gfx/wr/webrender_build/src/shader.rs
+index 2f7985c9065d..6e1a0cf45265 100644
+--- a/gfx/wr/webrender_build/src/shader.rs
++++ b/gfx/wr/webrender_build/src/shader.rs
+@@ -31,6 +31,9 @@ pub enum ShaderKind {
+ pub enum ShaderVersion {
+     Gl,
+     Gles,
++    /// OpenGL ES 2.0 (GLSL ES 1.00), for GPUs without ES 3.0 such as the
++    /// PowerVR SGX5xx.
++    Gles2,
+ }
+ 
+ impl ShaderVersion {
+@@ -39,6 +42,7 @@ impl ShaderVersion {
+         match self {
+             ShaderVersion::Gl => "ShaderVersion::Gl",
+             ShaderVersion::Gles => "ShaderVersion::Gles",
++            ShaderVersion::Gles2 => "ShaderVersion::Gles2",
+         }
+     }
+ }
+@@ -170,8 +174,15 @@ pub fn build_shader_prefix_string<F: FnMut(&str)>(
+         ShaderVersion::Gl => "#version 150\n",
+         ShaderVersion::Gles if features.contains(&"TEXTURE_EXTERNAL_ESSL1") => "#version 100\n",
+         ShaderVersion::Gles => "#version 300 es\n",
++        ShaderVersion::Gles2 => "#version 100\n",
+     };
+     output(gl_version_string);
++    // The OpenGL ES 2.0 data paths (no integer textures or attributes, no
++    // texelFetch, no bit operations), next to the GLSL ES 1.00 syntax that
++    // __VERSION__ == 100 already selects
++    if gl_version == ShaderVersion::Gles2 {
++        output("#define WR_GLES2\n");
++    }
+ 
+     // Insert the shader name to make debugging easier.
+     output("// shader: ");
+-- 
+2.56.0
+

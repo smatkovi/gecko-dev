@@ -1,0 +1,75 @@
+From aa7fb4748afaaae20b311633facf5703b11ced65 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 11:56:16 +0100
+Subject: [PATCH 148/156] toolkit: --disable-qt-geolocation, Qt Positioning
+ only when wanted
+
+Geolocation through Qt Positioning (QTMLocationProvider in gecko-qt) was
+always built and Qt5Positioning was required and linked into libxul. Make
+it an option, on by default as before. Its compiler and linker flags come
+from their own pkg-config check (MOZ_QT_POSITIONING_CFLAGS, _LIBS), used
+only where the provider is built; with --disable-qt-geolocation neither
+the provider nor Qt5Positioning is part of the build.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ dom/geolocation/moz.build |  2 +-
+ toolkit/library/moz.build |  2 ++
+ toolkit/moz.configure     | 15 +++++++++++++--
+ 3 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/dom/geolocation/moz.build b/dom/geolocation/moz.build
+index 0164ddf171c6..30ea004d33bd 100644
+--- a/dom/geolocation/moz.build
++++ b/dom/geolocation/moz.build
+@@ -73,7 +73,7 @@ if CONFIG['MOZ_ENABLE_QT5GEOPOSITION']:
+     LOCAL_INCLUDES += [
+         '/dom/system/qt',
+     ]
+-    CXXFLAGS += CONFIG['MOZ_QT_CFLAGS']
++    CXXFLAGS += CONFIG['MOZ_QT_CFLAGS'] + CONFIG['MOZ_QT_POSITIONING_CFLAGS']
+ 
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
+     LOCAL_INCLUDES += [
+diff --git a/toolkit/library/moz.build b/toolkit/library/moz.build
+index 57af0569c4bc..31d248f4947e 100644
+--- a/toolkit/library/moz.build
++++ b/toolkit/library/moz.build
+@@ -337,6 +337,8 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" and CONFIG["COMPILE_ENVIRONMENT"]:
+ 
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
+     OS_LIBS += CONFIG['MOZ_QT_LIBS']
++    if CONFIG['MOZ_ENABLE_QT5GEOPOSITION']:
++        OS_LIBS += CONFIG['MOZ_QT_POSITIONING_LIBS']
+     OS_LIBS += CONFIG['MOZ_PANGO_LIBS']
+ 
+ if CONFIG["MOZ_ENABLE_LIBPROXY"]:
+diff --git a/toolkit/moz.configure b/toolkit/moz.configure
+index 7c511a6394d4..1a8959f5c4f0 100644
+--- a/toolkit/moz.configure
++++ b/toolkit/moz.configure
+@@ -642,8 +642,19 @@ with only_when(toolkit_qt):
+     set_define("MOZ_ENABLE_QT5FEEDBACK", True, when=qt_feedback)
+     set_config("MOZ_ENABLE_CONTENTACTION", True, when=contentaction)
+     set_define("MOZ_ENABLE_CONTENTACTION", True, when=contentaction)
+-    set_config("MOZ_ENABLE_QT5GEOPOSITION", True)
+-    set_define("MOZ_ENABLE_QT5GEOPOSITION", True)
++    # Geolocation through Qt Positioning (QTMLocationProvider in gecko-qt),
++    # on by default. Its flags come separately (MOZ_QT_POSITIONING_CFLAGS,
++    # _LIBS); with --disable-qt-geolocation the provider is left out and
++    # Qt5Positioning neither required nor linked, and navigator.geolocation
++    # has no provider.
++    option(
++        "--disable-qt-geolocation",
++        help="Do not use Qt Positioning for geolocation",
++    )
++    with only_when("--enable-qt-geolocation"):
++        pkg_check_modules("MOZ_QT_POSITIONING", "Qt5Positioning")
++        set_config("MOZ_ENABLE_QT5GEOPOSITION", True)
++        set_define("MOZ_ENABLE_QT5GEOPOSITION", True)
+ 
+     check_prog("MOC", ("moc-qt5", "moc"))
+     check_prog("RCC", ("rcc-qt5", "rcc"))
+-- 
+2.56.0
+

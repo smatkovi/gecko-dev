@@ -1,0 +1,318 @@
+From 48d6d2f7d6c30d30eac3ca324c2974464474f2ac Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:10:56 +0100
+Subject: [PATCH 152/156] webrender: declare vertex attributes with attribute,
+ not in
+
+GLSL ES 1.00 only knows attribute; base.glsl maps it to in for the other
+versions, so the shaders compile unchanged there (GL 3: 64, ES 3: 49
+variants).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/clip_shared.glsl        |  8 +++----
+ gfx/wr/webrender/res/cs_blur.glsl            | 10 ++++-----
+ gfx/wr/webrender/res/cs_border_segment.glsl  | 18 ++++++++--------
+ gfx/wr/webrender/res/cs_border_solid.glsl    | 18 ++++++++--------
+ gfx/wr/webrender/res/cs_clip_rectangle.glsl  | 22 ++++++++++----------
+ gfx/wr/webrender/res/cs_line_decoration.glsl | 10 ++++-----
+ gfx/wr/webrender/res/cs_svg_filter_node.glsl | 16 +++++++-------
+ gfx/wr/webrender/res/debug_color.glsl        |  2 +-
+ gfx/wr/webrender/res/debug_font.glsl         |  4 ++--
+ gfx/wr/webrender/res/gpu_cache_update.glsl   |  4 ++--
+ gfx/wr/webrender/res/prim_shared.glsl        |  2 +-
+ gfx/wr/webrender/res/ps_clear.glsl           |  4 ++--
+ gfx/wr/webrender/res/ps_quad.glsl            |  2 +-
+ gfx/wr/webrender/res/ps_quad_mask.glsl       |  2 +-
+ 14 files changed, 61 insertions(+), 61 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/clip_shared.glsl b/gfx/wr/webrender/res/clip_shared.glsl
+index bd356b0b1855..fe67ed2b65d7 100644
+--- a/gfx/wr/webrender/res/clip_shared.glsl
++++ b/gfx/wr/webrender/res/clip_shared.glsl
+@@ -6,10 +6,10 @@
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-PER_INSTANCE in vec4 aClipDeviceArea;
+-PER_INSTANCE in vec4 aClipOrigins;
+-PER_INSTANCE in float aDevicePixelScale;
+-PER_INSTANCE in ivec2 aTransformIds;
++PER_INSTANCE attribute vec4 aClipDeviceArea;
++PER_INSTANCE attribute vec4 aClipOrigins;
++PER_INSTANCE attribute float aDevicePixelScale;
++PER_INSTANCE attribute ivec2 aTransformIds;
+ 
+ struct ClipMaskInstanceCommon {
+     RectWithEndpoint sub_rect;
+diff --git a/gfx/wr/webrender/res/cs_blur.glsl b/gfx/wr/webrender/res/cs_blur.glsl
+index 94adcef27d19..c8a1f7935f26 100644
+--- a/gfx/wr/webrender/res/cs_blur.glsl
++++ b/gfx/wr/webrender/res/cs_blur.glsl
+@@ -25,11 +25,11 @@ flat varying mediump vec2 vGaussCoefficients;
+ #define DIR_HORIZONTAL  0
+ #define DIR_VERTICAL    1
+ 
+-PER_INSTANCE in int aBlurRenderTaskAddress;
+-PER_INSTANCE in int aBlurSourceTaskAddress;
+-PER_INSTANCE in int aBlurDirection;
+-PER_INSTANCE in int aBlurEdgeMode;
+-PER_INSTANCE in vec3 aBlurParams;
++PER_INSTANCE attribute int aBlurRenderTaskAddress;
++PER_INSTANCE attribute int aBlurSourceTaskAddress;
++PER_INSTANCE attribute int aBlurDirection;
++PER_INSTANCE attribute int aBlurEdgeMode;
++PER_INSTANCE attribute vec3 aBlurParams;
+ 
+ struct BlurTask {
+     RectWithEndpoint task_rect;
+diff --git a/gfx/wr/webrender/res/cs_border_segment.glsl b/gfx/wr/webrender/res/cs_border_segment.glsl
+index 7deb62f6efd2..bce9f5527178 100644
+--- a/gfx/wr/webrender/res/cs_border_segment.glsl
++++ b/gfx/wr/webrender/res/cs_border_segment.glsl
+@@ -74,15 +74,15 @@ varying highp vec2 vPos;
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-PER_INSTANCE in vec2 aTaskOrigin;
+-PER_INSTANCE in vec4 aRect;
+-PER_INSTANCE in vec4 aColor0;
+-PER_INSTANCE in vec4 aColor1;
+-PER_INSTANCE in int aFlags;
+-PER_INSTANCE in vec2 aWidths;
+-PER_INSTANCE in vec2 aRadii;
+-PER_INSTANCE in vec4 aClipParams1;
+-PER_INSTANCE in vec4 aClipParams2;
++PER_INSTANCE attribute vec2 aTaskOrigin;
++PER_INSTANCE attribute vec4 aRect;
++PER_INSTANCE attribute vec4 aColor0;
++PER_INSTANCE attribute vec4 aColor1;
++PER_INSTANCE attribute int aFlags;
++PER_INSTANCE attribute vec2 aWidths;
++PER_INSTANCE attribute vec2 aRadii;
++PER_INSTANCE attribute vec4 aClipParams1;
++PER_INSTANCE attribute vec4 aClipParams2;
+ 
+ vec2 get_outer_corner_scale(int segment) {
+     vec2 p;
+diff --git a/gfx/wr/webrender/res/cs_border_solid.glsl b/gfx/wr/webrender/res/cs_border_solid.glsl
+index 460646e21b18..ebbdaf149f87 100644
+--- a/gfx/wr/webrender/res/cs_border_solid.glsl
++++ b/gfx/wr/webrender/res/cs_border_solid.glsl
+@@ -46,15 +46,15 @@ varying highp vec2 vPos;
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-PER_INSTANCE in vec2 aTaskOrigin;
+-PER_INSTANCE in vec4 aRect;
+-PER_INSTANCE in vec4 aColor0;
+-PER_INSTANCE in vec4 aColor1;
+-PER_INSTANCE in int aFlags;
+-PER_INSTANCE in vec2 aWidths;
+-PER_INSTANCE in vec2 aRadii;
+-PER_INSTANCE in vec4 aClipParams1;
+-PER_INSTANCE in vec4 aClipParams2;
++PER_INSTANCE attribute vec2 aTaskOrigin;
++PER_INSTANCE attribute vec4 aRect;
++PER_INSTANCE attribute vec4 aColor0;
++PER_INSTANCE attribute vec4 aColor1;
++PER_INSTANCE attribute int aFlags;
++PER_INSTANCE attribute vec2 aWidths;
++PER_INSTANCE attribute vec2 aRadii;
++PER_INSTANCE attribute vec4 aClipParams1;
++PER_INSTANCE attribute vec4 aClipParams2;
+ 
+ vec2 get_outer_corner_scale(int segment) {
+     vec2 p;
+diff --git a/gfx/wr/webrender/res/cs_clip_rectangle.glsl b/gfx/wr/webrender/res/cs_clip_rectangle.glsl
+index bb17c10d5a83..818950201077 100644
+--- a/gfx/wr/webrender/res/cs_clip_rectangle.glsl
++++ b/gfx/wr/webrender/res/cs_clip_rectangle.glsl
+@@ -23,17 +23,17 @@ flat varying mediump vec2 vClipMode;
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-PER_INSTANCE in vec2 aClipLocalPos;
+-PER_INSTANCE in vec4 aClipLocalRect;
+-PER_INSTANCE in float aClipMode;
+-PER_INSTANCE in vec4 aClipRect_TL;
+-PER_INSTANCE in vec4 aClipRadii_TL;
+-PER_INSTANCE in vec4 aClipRect_TR;
+-PER_INSTANCE in vec4 aClipRadii_TR;
+-PER_INSTANCE in vec4 aClipRect_BL;
+-PER_INSTANCE in vec4 aClipRadii_BL;
+-PER_INSTANCE in vec4 aClipRect_BR;
+-PER_INSTANCE in vec4 aClipRadii_BR;
++PER_INSTANCE attribute vec2 aClipLocalPos;
++PER_INSTANCE attribute vec4 aClipLocalRect;
++PER_INSTANCE attribute float aClipMode;
++PER_INSTANCE attribute vec4 aClipRect_TL;
++PER_INSTANCE attribute vec4 aClipRadii_TL;
++PER_INSTANCE attribute vec4 aClipRect_TR;
++PER_INSTANCE attribute vec4 aClipRadii_TR;
++PER_INSTANCE attribute vec4 aClipRect_BL;
++PER_INSTANCE attribute vec4 aClipRadii_BL;
++PER_INSTANCE attribute vec4 aClipRect_BR;
++PER_INSTANCE attribute vec4 aClipRadii_BR;
+ 
+ struct ClipMaskInstanceRect {
+     ClipMaskInstanceCommon base;
+diff --git a/gfx/wr/webrender/res/cs_line_decoration.glsl b/gfx/wr/webrender/res/cs_line_decoration.glsl
+index 00ed2e249a2d..3b94274d12c4 100644
+--- a/gfx/wr/webrender/res/cs_line_decoration.glsl
++++ b/gfx/wr/webrender/res/cs_line_decoration.glsl
+@@ -23,22 +23,22 @@ flat varying mediump vec4 vParams;
+ #ifdef WR_VERTEX_SHADER
+ 
+ // The size of the mask tile we're rendering, in pixels.
+-PER_INSTANCE in vec4 aTaskRect;
++PER_INSTANCE attribute vec4 aTaskRect;
+ 
+ // The size of the mask tile. aLocalSize.x is always horizontal and .y vertical,
+ // regardless of the line's orientation. The size is chosen by
+ // prim_store::line_dec::get_line_decoration_sizes.
+-PER_INSTANCE in vec2 aLocalSize;
++PER_INSTANCE attribute vec2 aLocalSize;
+ 
+ // A LINE_STYLE_* value, indicating what sort of line to draw.
+-PER_INSTANCE in int aStyle;
++PER_INSTANCE attribute int aStyle;
+ 
+ // 0.0 for a horizontal line, 1.0 for a vertical line.
+-PER_INSTANCE in float aAxisSelect;
++PER_INSTANCE attribute float aAxisSelect;
+ 
+ // The thickness of the wavy line itself, not the amplitude of the waves (i.e.,
+ // the thickness of the final decorated line).
+-PER_INSTANCE in float aWavyLineThickness;
++PER_INSTANCE attribute float aWavyLineThickness;
+ 
+ void main(void) {
+     vec2 size = mix(aLocalSize, aLocalSize.yx, aAxisSelect);
+diff --git a/gfx/wr/webrender/res/cs_svg_filter_node.glsl b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+index 2953c40ccb64..8522ca3c1089 100644
+--- a/gfx/wr/webrender/res/cs_svg_filter_node.glsl
++++ b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+@@ -165,14 +165,14 @@ flat varying mediump ivec4 vFuncs;
+ #ifdef WR_VERTEX_SHADER
+ 
+ // due to padding around the target rect, we need to know both target and render task rect
+-PER_INSTANCE in vec4 aFilterTargetRect;
+-PER_INSTANCE in vec4 aFilterInput1ContentScaleAndOffset;
+-PER_INSTANCE in vec4 aFilterInput2ContentScaleAndOffset;
+-PER_INSTANCE in int aFilterInput1TaskAddress;
+-PER_INSTANCE in int aFilterInput2TaskAddress;
+-PER_INSTANCE in int aFilterKind;
+-PER_INSTANCE in int aFilterInputCount;
+-PER_INSTANCE in int aFilterExtraDataAddress;
++PER_INSTANCE attribute vec4 aFilterTargetRect;
++PER_INSTANCE attribute vec4 aFilterInput1ContentScaleAndOffset;
++PER_INSTANCE attribute vec4 aFilterInput2ContentScaleAndOffset;
++PER_INSTANCE attribute int aFilterInput1TaskAddress;
++PER_INSTANCE attribute int aFilterInput2TaskAddress;
++PER_INSTANCE attribute int aFilterKind;
++PER_INSTANCE attribute int aFilterInputCount;
++PER_INSTANCE attribute int aFilterExtraDataAddress;
+ 
+ // used for feFlood and feDropShadow colors
+ // this is based on SrgbToLinear below, but that version hits SWGL compile
+diff --git a/gfx/wr/webrender/res/debug_color.glsl b/gfx/wr/webrender/res/debug_color.glsl
+index 12b530cda0e8..2e31bfc7294b 100644
+--- a/gfx/wr/webrender/res/debug_color.glsl
++++ b/gfx/wr/webrender/res/debug_color.glsl
+@@ -7,7 +7,7 @@
+ varying mediump vec4 vColor;
+ 
+ #ifdef WR_VERTEX_SHADER
+-in vec4 aColor;
++attribute vec4 aColor;
+ 
+ void main(void) {
+     vColor = vec4(aColor.rgb * aColor.a, aColor.a);
+diff --git a/gfx/wr/webrender/res/debug_font.glsl b/gfx/wr/webrender/res/debug_font.glsl
+index 3b08f1b2fe19..50115eb1bb95 100644
+--- a/gfx/wr/webrender/res/debug_font.glsl
++++ b/gfx/wr/webrender/res/debug_font.glsl
+@@ -10,8 +10,8 @@ varying highp vec2 vColorTexCoord;
+ varying mediump vec4 vColor;
+ 
+ #ifdef WR_VERTEX_SHADER
+-in vec4 aColor;
+-in vec2 aColorTexCoord;
++attribute vec4 aColor;
++attribute vec2 aColorTexCoord;
+ 
+ void main(void) {
+     vColor = aColor;
+diff --git a/gfx/wr/webrender/res/gpu_cache_update.glsl b/gfx/wr/webrender/res/gpu_cache_update.glsl
+index fcabfacb4fd8..be47909620f0 100644
+--- a/gfx/wr/webrender/res/gpu_cache_update.glsl
++++ b/gfx/wr/webrender/res/gpu_cache_update.glsl
+@@ -7,8 +7,8 @@
+ varying highp vec4 vData;
+ 
+ #ifdef WR_VERTEX_SHADER
+-in vec4 aValue;
+-in vec2 aPosition;
++attribute vec4 aValue;
++attribute vec2 aPosition;
+ 
+ void main() {
+     vData = aValue;
+diff --git a/gfx/wr/webrender/res/prim_shared.glsl b/gfx/wr/webrender/res/prim_shared.glsl
+index 5a91c3522842..80c81b053325 100644
+--- a/gfx/wr/webrender/res/prim_shared.glsl
++++ b/gfx/wr/webrender/res/prim_shared.glsl
+@@ -35,7 +35,7 @@ uniform HIGHP_SAMPLER_FLOAT sampler2D sPrimitiveHeadersF;
+ uniform HIGHP_SAMPLER_FLOAT isampler2D sPrimitiveHeadersI;
+ 
+ // Instanced attributes
+-PER_INSTANCE in ivec4 aData;
++PER_INSTANCE attribute ivec4 aData;
+ 
+ #define VECS_PER_PRIM_HEADER_F 2U
+ #define VECS_PER_PRIM_HEADER_I 2U
+diff --git a/gfx/wr/webrender/res/ps_clear.glsl b/gfx/wr/webrender/res/ps_clear.glsl
+index 567dea978d2a..2e0a5ef8e755 100644
+--- a/gfx/wr/webrender/res/ps_clear.glsl
++++ b/gfx/wr/webrender/res/ps_clear.glsl
+@@ -7,8 +7,8 @@
+ varying mediump vec4 vColor;
+ 
+ #ifdef WR_VERTEX_SHADER
+-PER_INSTANCE in vec4 aRect;
+-PER_INSTANCE in vec4 aColor;
++PER_INSTANCE attribute vec4 aRect;
++PER_INSTANCE attribute vec4 aColor;
+ 
+ void main(void) {
+     vec2 pos = mix(aRect.xy, aRect.zw, aPosition.xy);
+diff --git a/gfx/wr/webrender/res/ps_quad.glsl b/gfx/wr/webrender/res/ps_quad.glsl
+index 3e534009b9a1..267ff58fd45c 100644
+--- a/gfx/wr/webrender/res/ps_quad.glsl
++++ b/gfx/wr/webrender/res/ps_quad.glsl
+@@ -77,7 +77,7 @@ varying highp vec2 vLocalPos;
+ 
+ #define AA_PIXEL_RADIUS 2.0
+ 
+-PER_INSTANCE in ivec4 aData;
++PER_INSTANCE attribute ivec4 aData;
+ 
+ struct QuadSegment {
+     RectWithEndpoint rect;
+diff --git a/gfx/wr/webrender/res/ps_quad_mask.glsl b/gfx/wr/webrender/res/ps_quad_mask.glsl
+index 1f8d2cef24e1..2ff73d33d945 100644
+--- a/gfx/wr/webrender/res/ps_quad_mask.glsl
++++ b/gfx/wr/webrender/res/ps_quad_mask.glsl
+@@ -28,7 +28,7 @@ flat varying highp vec2 vClipMode;
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+-PER_INSTANCE in ivec4 aClipData;
++PER_INSTANCE attribute ivec4 aClipData;
+ 
+ #define CLIP_SPACE_DEVICE       0
+ #define CLIP_SPACE_PRIMITIVE    1
+-- 
+2.56.0
+

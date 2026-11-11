@@ -1,0 +1,40 @@
+From 3f4fd0fb9095e52de60c3a38abba3f9da672a4ae Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 07:21:37 +0000
+Subject: [PATCH 120/156] transplant-fix: EmbedLiteCompositorWidget takes
+ nsIWidget* (nsBaseWidget removed upstream, Bug 1994157)
+
+---
+ widget/EmbedLiteCompositorWidget.cpp | 2 +-
+ widget/EmbedLiteCompositorWidget.h   | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/widget/EmbedLiteCompositorWidget.cpp b/widget/EmbedLiteCompositorWidget.cpp
+index 7c4841a45af3..c454ddff4ac7 100644
+--- a/widget/EmbedLiteCompositorWidget.cpp
++++ b/widget/EmbedLiteCompositorWidget.cpp
+@@ -9,7 +9,7 @@
+ namespace mozilla::widget {
+ 
+ EmbedLiteCompositorWidget::EmbedLiteCompositorWidget(
+-    const layers::CompositorOptions& aOptions, nsBaseWidget* aWidget)
++    const layers::CompositorOptions& aOptions, nsIWidget* aWidget)
+     : InProcessCompositorWidget(aOptions, aWidget) {}
+ 
+ }  // namespace mozilla::widget
+diff --git a/widget/EmbedLiteCompositorWidget.h b/widget/EmbedLiteCompositorWidget.h
+index 4ddbc4c90b50..a6b07050918b 100644
+--- a/widget/EmbedLiteCompositorWidget.h
++++ b/widget/EmbedLiteCompositorWidget.h
+@@ -14,7 +14,7 @@ namespace mozilla::widget {
+ class EmbedLiteCompositorWidget final : public InProcessCompositorWidget {
+  public:
+   explicit EmbedLiteCompositorWidget(
+-      const layers::CompositorOptions& aOptions, nsBaseWidget* aWidget);
++      const layers::CompositorOptions& aOptions, nsIWidget* aWidget);
+ 
+   EmbedLiteCompositorWidget* AsEmbedLite() override { return this; }
+   bool IsEmbedLiteOffscreen() const override { return true; }
+-- 
+2.56.0
+

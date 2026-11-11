@@ -1,0 +1,27 @@
+From bda99042a75d4e130358b04cf09cea41add17d84 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 19:13:21 +0000
+Subject: [PATCH 105/156] transplant-fix: freetype
+ gamma/enhanced_contrast-Prefs auch fuer Qt (ScaledFontFontconfig ruft sie
+ plattformbreit)
+
+---
+ modules/libpref/init/StaticPrefList.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index d9399dca0525..ea82d257c7b0 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -7772,7 +7772,7 @@
+   value: false
+   mirror: always
+ 
+-#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_ANDROID)
++#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_QT)
+   # -1 = disabled (no preblend, original behavior)
+   #  0 = sRGB transfer
+   # >0 = value/100.0 exponent
+-- 
+2.56.0
+

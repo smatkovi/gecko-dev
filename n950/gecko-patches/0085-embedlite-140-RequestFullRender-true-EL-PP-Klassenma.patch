@@ -1,0 +1,77 @@
+From 5e4471dc57b050cf0c31d8b62f9d9eb94d5c35fb Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Thu, 20 Aug 2026 11:21:27 +0200
+Subject: [PATCH 085/156] embedlite-140: RequestFullRender=true +
+ EL-PP-Klassenmarker
+
+Surface-Fabrik liefert pro Frame ein fabrikneues FBO (fbo-IDs monoton
+1..458) - Picture-Cache darf nie Vorframe-Inhalt annehmen. (Anm.:
+gegen die Touch-Degradation nachweislich nicht ausreichend.)
+---
+ gfx/webrender_bindings/RenderCompositorEGL.cpp | 14 +++++++++++++-
+ gfx/webrender_bindings/RenderCompositorOGL.cpp | 14 +++++++++++++-
+ 2 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index f60f414d4254..fbd0278db6e0 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -401,6 +401,8 @@ LayoutDeviceIntSize RenderCompositorEGL::GetBufferSize() {
+ 
+ bool RenderCompositorEGL::UsePartialPresent() {
+ #ifdef MOZ_EMBEDLITE
++  static bool sLogged = false;
++  if (!sLogged) { sLogged = true; gfxCriticalNote << "EL-PP RenderCompositorEGL active, partial OFF"; }
+   // Embedding rendert in die SharedSurface-Rotation ohne echte
+   // Swapchain-Age-Semantik - Partial Present frisst dort Pixel
+   // (wachsende schwarze Loecher). Hart aus, unabhaengig vom Widget:
+@@ -411,7 +413,17 @@ bool RenderCompositorEGL::UsePartialPresent() {
+ #endif
+ }
+ 
+-bool RenderCompositorEGL::RequestFullRender() { return false; }
++bool RenderCompositorEGL::RequestFullRender() {
++#ifdef MOZ_EMBEDLITE
++  // Surface-Fabrik: jeder Frame ein fabrikneues (schwarzes) FBO - Picture-
++  // Cache darf nie annehmen, das Ziel enthalte den letzten Frame. Ohne das
++  // zeichnen APZ-Composites (Touch!) nur Dirty-Tiles in leere Buffer:
++  // 68-88%-Schwarz-Degradation exakt bei Beruehrung.
++  return true;
++#else
++  return false;
++#endif
++}
+ 
+ uint32_t RenderCompositorEGL::GetMaxPartialPresentRects() {
+   return gfx::gfxVars::WebRenderMaxPartialPresentRects();
+diff --git a/gfx/webrender_bindings/RenderCompositorOGL.cpp b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+index 8a7f084689f7..64dc945c952d 100644
+--- a/gfx/webrender_bindings/RenderCompositorOGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+@@ -158,10 +158,22 @@ uint32_t RenderCompositorOGL::GetMaxPartialPresentRects() {
+   return gfx::gfxVars::WebRenderMaxPartialPresentRects();
+ }
+ 
+-bool RenderCompositorOGL::RequestFullRender() { return false; }
++bool RenderCompositorOGL::RequestFullRender() {
++#ifdef MOZ_EMBEDLITE
++  // Surface-Fabrik: jeder Frame ein fabrikneues (schwarzes) FBO - Picture-
++  // Cache darf nie annehmen, das Ziel enthalte den letzten Frame. Ohne das
++  // zeichnen APZ-Composites (Touch!) nur Dirty-Tiles in leere Buffer:
++  // 68-88%-Schwarz-Degradation exakt bei Beruehrung.
++  return true;
++#else
++  return false;
++#endif
++}
+ 
+ bool RenderCompositorOGL::UsePartialPresent() {
+ #ifdef MOZ_EMBEDLITE
++  static bool sLogged = false;
++  if (!sLogged) { sLogged = true; gfxCriticalNote << "EL-PP RenderCompositorOGL active, partial OFF"; }
+   // Embedding rendert in die SharedSurface-Rotation ohne echte
+   // Swapchain-Age-Semantik - Partial Present frisst dort Pixel
+   // (wachsende schwarze Loecher). Hart aus, unabhaengig vom Widget:
+-- 
+2.56.0
+

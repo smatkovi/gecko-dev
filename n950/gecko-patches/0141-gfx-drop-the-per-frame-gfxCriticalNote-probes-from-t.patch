@@ -1,0 +1,115 @@
+From 229436f0c5ee4452d7536a31c0dddb6eb1cec62b Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Mon, 24 Aug 2026 13:54:20 +0000
+Subject: [PATCH 141/156] gfx: drop the per-frame gfxCriticalNote probes from
+ the compositor path
+
+They ended up in crash annotations and drowned out real messages in the log.
+The LOGT probes in EmbedLiteCompositorBridgeParent stay - they only appear with
+EmbedLite logging enabled and mark the failure paths worth looking at.
+---
+ gfx/webrender_bindings/RendererOGL.cpp | 9 +++------
+ layout/base/nsRefreshDriver.cpp        | 9 ---------
+ 2 files changed, 3 insertions(+), 15 deletions(-)
+
+diff --git a/gfx/webrender_bindings/RendererOGL.cpp b/gfx/webrender_bindings/RendererOGL.cpp
+index 5f26e1f2ea44..4bf7bc9cecf1 100644
+--- a/gfx/webrender_bindings/RendererOGL.cpp
++++ b/gfx/webrender_bindings/RendererOGL.cpp
+@@ -195,8 +195,7 @@ RenderedFrameId RendererOGL::UpdateAndRender(
+       return RenderedFrameId();
+     }
+     needPostRenderCall = true;
+-    gfxCriticalNote << "EL-A PreRender ok";
+-
++  
+     // XXX set clear color if MOZ_WIDGET_ANDROID is defined.
+ 
+     if (aReadbackBuffer.isSome() || layers::ProfilerScreenshots::IsEnabled()) {
+@@ -205,10 +204,8 @@ RenderedFrameId RendererOGL::UpdateAndRender(
+       }
+     }
+ 
+-    gfxCriticalNote << "EL-B call BeginFrame";
+-    if (!mCompositor->BeginFrame()) {
+-      gfxCriticalNote << "EL-C BeginFrame false";
+-      beginFrame = false;
++      if (!mCompositor->BeginFrame()) {
++        beginFrame = false;
+     }
+ 
+     size = mCompositor->GetBufferSize();
+diff --git a/layout/base/nsRefreshDriver.cpp b/layout/base/nsRefreshDriver.cpp
+index ab10e354ed9f..30e0c542438c 100644
+--- a/layout/base/nsRefreshDriver.cpp
++++ b/layout/base/nsRefreshDriver.cpp
+@@ -567,7 +567,6 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
+     }
+ 
+     void NotifyVsyncTimerOnMainThread() {
+-      { static bool o1=false; if(!o1){o1=true; gfxCriticalNote << "EL-Z4a vsync on main"; } }
+       MOZ_ASSERT(NS_IsMainThread());
+ 
+       if (!mVsyncRefreshDriverTimer) {
+@@ -754,7 +753,6 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
+       }
+     }
+ 
+-    { static bool o2=false; if(!o2){o2=true; gfxCriticalNote << "EL-Z4b ->TickRefreshDriver"; } }
+     TickRefreshDriver(aVsyncEvent.mId, aVsyncEvent.mTime);
+   }
+ 
+@@ -1192,7 +1190,6 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
+     if (widget) {
+       if (RefPtr<VsyncDispatcher> vsyncDispatcher =
+               widget->GetVsyncDispatcher()) {
+-        gfxCriticalNote << "EL-Y0a RD widget-vd";
+         mOwnTimer = VsyncRefreshDriverTimer::
+             CreateForParentProcessWithLocalVsyncDispatcher(
+                 std::move(vsyncDispatcher));
+@@ -1215,7 +1212,6 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
+       // Make sure all vsync systems are ready.
+       gfxPlatform::GetPlatform();
+       // In parent process, we can create the VsyncRefreshDriverTimer directly.
+-      gfxCriticalNote << "EL-Y0b RD global-vsync";
+       sRegularRateTimer =
+           VsyncRefreshDriverTimer::CreateForParentProcessWithGlobalVsync();
+     } else {
+@@ -2305,7 +2301,6 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
+   if (IsFrozen() || !mPresContext) {
+     return;
+   }
+-  { static bool o3=false; if(!o3){o3=true; gfxCriticalNote << "EL-Z1 Driver::Tick obs=" << ObserverCount(); } }
+ 
+   // We can have a race condition where the vsync timestamp
+   // is before the most recent refresh due to a forced refresh.
+@@ -2634,18 +2629,15 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
+ 
+ bool nsRefreshDriver::PaintIfNeeded() {
+   if (mThrottled) {
+-    { static bool a=false; if(!a){a=true; gfxCriticalNote << "EL-Z10 paint-blocked: throttled"; } }
+     return false;
+   }
+   if (IsPresentingInVR()) {
+-    { static bool b=false; if(!b){b=true; gfxCriticalNote << "EL-Z11 paint-blocked: vr"; } }
+     // Skip the paint in immersive VR mode because whatever we paint here will
+     // not end up on the screen. The screen is displaying WebGL content from a
+     // single canvas in that mode.
+     return false;
+   }
+   if (mPresContext->Document()->IsRenderingSuppressed()) {
+-    { static bool c=false; if(!c){c=true; gfxCriticalNote << "EL-Z12 paint-blocked: suppressed"; } }
+     // If the top level document is suppressed, skip painting altogether.
+     // TODO(emilio): Deal with this properly for subdocuments.
+     return false;
+@@ -2679,7 +2671,6 @@ bool nsRefreshDriver::PaintIfNeeded() {
+     if (nsXULPopupManager* pm = nsXULPopupManager::GetInstance()) {
+       pm->PaintPopups(this);
+     }
+-    { static bool d=false; if(!d){d=true; gfxCriticalNote << "EL-Z13 PaintSynchronously!"; } }
+     ps->PaintSynchronously();
+   }
+   return true;
+-- 
+2.56.0
+

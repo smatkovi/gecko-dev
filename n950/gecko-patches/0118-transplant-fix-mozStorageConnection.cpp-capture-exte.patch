@@ -1,0 +1,27 @@
+From c57f82b7f41f44695d684ef6963819e2a1f26262 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 05:58:12 +0000
+Subject: [PATCH 118/156] transplant-fix: mozStorageConnection.cpp - capture
+ extensionName instead of the removed entryPoint in the LoadExtension lambda
+ (series hunk "Use the platform SQLite library" vs. upstream capture line)
+
+---
+ storage/mozStorageConnection.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/storage/mozStorageConnection.cpp b/storage/mozStorageConnection.cpp
+index 8c03c2e38b97..2c7bef707a6c 100644
+--- a/storage/mozStorageConnection.cpp
++++ b/storage/mozStorageConnection.cpp
+@@ -3098,7 +3098,7 @@ Connection::LoadExtension(const nsACString& aExtensionName,
+ 
+   RefPtr<Runnable> loadTask = NS_NewRunnableFunction(
+       "mozStorageConnection::LoadExtension",
+-      [this, self = RefPtr(this), entryPoint = std::move(entryPoint),
++      [this, self = RefPtr(this), extensionName = std::move(extensionName),
+        callback = RefPtr(aCallback)]() mutable {
+         MOZ_ASSERT(
+             !NS_IsMainThread() ||
+-- 
+2.56.0
+

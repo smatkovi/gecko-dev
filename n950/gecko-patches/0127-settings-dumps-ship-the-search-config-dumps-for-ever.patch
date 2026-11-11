@@ -1,0 +1,29 @@
+From 86a9ac53ce857f08b8f63f2bce79ac3f4e82f618 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 18:09:45 +0000
+Subject: [PATCH 127/156] settings dumps: ship the search-config dumps for
+ every app except mobile/android (mobile/sailfishos was excluded by the
+ startswith("mobile/") check)
+
+---
+ services/settings/dumps/main/moz.build | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/services/settings/dumps/main/moz.build b/services/settings/dumps/main/moz.build
+index 2c83ffc7874a..25e02df72d6e 100644
+--- a/services/settings/dumps/main/moz.build
++++ b/services/settings/dumps/main/moz.build
+@@ -16,7 +16,9 @@ if CONFIG["MOZ_BUILD_APP"] == "browser":
+ 
+ # These collections are referenced in toolkit/ or other core code, however
+ # Android/iOS don't use/want the dumps.
+-if not CONFIG["MOZ_BUILD_APP"].startswith("mobile/"):
++# Android ships its own search configuration; other mobile embedders
++# (e.g. mobile/sailfishos) need the dumps like desktop does.
++if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
+     FINAL_TARGET_FILES.defaults.settings.main += [
+         "anti-tracking-url-decoration.json",
+         "cookie-banner-rules-list.json",
+-- 
+2.56.0
+

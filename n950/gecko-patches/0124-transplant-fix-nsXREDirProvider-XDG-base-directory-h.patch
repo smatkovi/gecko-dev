@@ -1,0 +1,50 @@
+From 7a6b293536b611bbb89488f3fd2eca5812ac497b Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 09:15:28 +0000
+Subject: [PATCH 124/156] transplant-fix: nsXREDirProvider - XDG base directory
+ helpers also for MOZ_WIDGET_QT (upstream guards them with MOZ_WIDGET_GTK but
+ calls them under XP_UNIX, Bug 259356)
+
+---
+ toolkit/xre/nsXREDirProvider.cpp | 4 ++--
+ toolkit/xre/nsXREDirProvider.h   | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/toolkit/xre/nsXREDirProvider.cpp b/toolkit/xre/nsXREDirProvider.cpp
+index fea288aa5b6d..b8d13ce1b274 100644
+--- a/toolkit/xre/nsXREDirProvider.cpp
++++ b/toolkit/xre/nsXREDirProvider.cpp
+@@ -101,7 +101,7 @@ nsIFile* gDataDirHome = nullptr;
+ constinit nsCOMPtr<nsIFile> gDataDirProfileLocal{};
+ constinit nsCOMPtr<nsIFile> gDataDirProfile{};
+ 
+-#if defined(MOZ_WIDGET_GTK)
++#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ nsXREDirProvider::legacyOrXDGHomeTelemetry gXdgTelemetry =
+     nsXREDirProvider::legacyOrXDGHomeTelemetry::empty;
+ #endif  // defined(MOZ_WIDGET_GTK)
+@@ -1306,7 +1306,7 @@ nsresult nsXREDirProvider::AppendSysUserExtensionPath(nsIFile* aFile) {
+   return NS_OK;
+ }
+ 
+-#if defined(MOZ_WIDGET_GTK)
++#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ /*
+  * Return whether MOZ_LEGACY_HOME == 1, via environment or at build time
+  */
+diff --git a/toolkit/xre/nsXREDirProvider.h b/toolkit/xre/nsXREDirProvider.h
+index 6c7e1990d3be..0f0017a5568d 100644
+--- a/toolkit/xre/nsXREDirProvider.h
++++ b/toolkit/xre/nsXREDirProvider.h
+@@ -68,7 +68,7 @@ class nsXREDirProvider final : public nsIDirectoryServiceProvider2,
+ 
+   static nsresult GetUserDataDirectory(nsIFile** aFile, bool aLocal);
+ 
+-#if defined(MOZ_WIDGET_GTK)
++#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+   static nsresult GetLegacyOrXDGEnvValue(const char* aHomeDir,
+                                          const char* aEnvName,
+                                          nsCString aSubdir, nsIFile** aFile,
+-- 
+2.56.0
+

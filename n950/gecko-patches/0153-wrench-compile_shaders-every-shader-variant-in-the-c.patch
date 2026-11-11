@@ -1,0 +1,155 @@
+From 99fbf0c88780c06b07a72ddfe496c8f062047678 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:11:01 +0100
+Subject: [PATCH 153/156] wrench: compile_shaders, every shader variant in the
+ current context
+
+Compiles and links each shader variant for the context's shader version
+and reports every failure, with the sources under --verbose; the sources
+come from WRENCH_SHADERS when set, so shader edits need no rebuild.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/args.yaml          |  2 +
+ gfx/wr/wrench/src/compile_shaders.rs | 93 ++++++++++++++++++++++++++++
+ gfx/wr/wrench/src/main.rs            |  7 +++
+ 3 files changed, 102 insertions(+)
+ create mode 100644 gfx/wr/wrench/src/compile_shaders.rs
+
+diff --git a/gfx/wr/wrench/src/args.yaml b/gfx/wr/wrench/src/args.yaml
+index 49ffbd5762c2..c029b630c5d7 100644
+--- a/gfx/wr/wrench/src/args.yaml
++++ b/gfx/wr/wrench/src/args.yaml
+@@ -189,3 +189,5 @@ subcommands:
+         about: Test for successful initialization then exit immediately
+     - test_shaders:
+         about: run shader tests
++    - compile_shaders:
++        about: compile and link every shader variant in the current GL context
+diff --git a/gfx/wr/wrench/src/compile_shaders.rs b/gfx/wr/wrench/src/compile_shaders.rs
+new file mode 100644
+index 000000000000..74bac2b1c293
+--- /dev/null
++++ b/gfx/wr/wrench/src/compile_shaders.rs
+@@ -0,0 +1,93 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++//! Compiles and links every shader variant in the current GL context.
++
++use gleam::gl;
++use webrender_build::shader::{build_shader_strings, get_shader_features};
++use webrender_build::shader::{ShaderFeatureFlags, ShaderVersion};
++
++fn shader_log(gl: &dyn gl::Gl, kind: gl::GLenum, source: &str) -> Result<gl::GLuint, String> {
++    let id = gl.create_shader(kind);
++    gl.shader_source(id, &[source.as_bytes()]);
++    gl.compile_shader(id);
++    let mut status = [0];
++    unsafe {
++        gl.get_shader_iv(id, gl::COMPILE_STATUS, &mut status);
++    }
++    if status[0] == 0 {
++        let log = gl.get_shader_info_log(id);
++        gl.delete_shader(id);
++        return Err(log);
++    }
++    Ok(id)
++}
++
++pub fn compile_shaders(gl: &dyn gl::Gl, verbose: bool) -> usize {
++    let version_string = gl.get_string(gl::VERSION);
++    let version = match gl.get_type() {
++        gl::GlType::Gl => ShaderVersion::Gl,
++        gl::GlType::Gles if version_string.starts_with("OpenGL ES 2.") => ShaderVersion::Gles2,
++        gl::GlType::Gles => ShaderVersion::Gles,
++    };
++    let flags = match version {
++        ShaderVersion::Gl => ShaderFeatureFlags::GL,
++        _ => ShaderFeatureFlags::GLES,
++    };
++    let source_dir = std::env::var_os("WRENCH_SHADERS").map(std::path::PathBuf::from);
++    println!("compile_shaders: {} -> {:?}", version_string, version);
++
++    let mut total = 0;
++    let mut failed = 0;
++    for (shader, configs) in get_shader_features(flags) {
++        for config in configs {
++            let features = config.split(",").filter(|f| !f.is_empty()).collect::<Vec<_>>();
++            let (vs, fs) = build_shader_strings(version, &features, shader, &|f| {
++                webrender::get_unoptimized_shader_source(f, source_dir.as_ref())
++            });
++            total += 1;
++            let name = format!("{} [{}]", shader, config);
++            let vs_id = shader_log(gl, gl::VERTEX_SHADER, &vs);
++            let fs_id = shader_log(gl, gl::FRAGMENT_SHADER, &fs);
++            let mut errors = Vec::new();
++            if let Err(log) = &vs_id {
++                errors.push(format!("vertex:\n{}", log.trim_end()));
++            }
++            if let Err(log) = &fs_id {
++                errors.push(format!("fragment:\n{}", log.trim_end()));
++            }
++            if let (Ok(v), Ok(f)) = (&vs_id, &fs_id) {
++                let program = gl.create_program();
++                gl.attach_shader(program, *v);
++                gl.attach_shader(program, *f);
++                gl.link_program(program);
++                let mut status = [0];
++                unsafe {
++                    gl.get_program_iv(program, gl::LINK_STATUS, &mut status);
++                }
++                if status[0] == 0 {
++                    errors.push(format!("link:\n{}", gl.get_program_info_log(program).trim_end()));
++                }
++                gl.delete_program(program);
++            }
++            for id in vs_id.iter().chain(fs_id.iter()) {
++                gl.delete_shader(*id);
++            }
++            if !errors.is_empty() {
++                failed += 1;
++                println!("FAIL {}", name);
++                for e in &errors {
++                    println!("  {}", e.replace('\n', "\n    "));
++                }
++                if verbose {
++                    println!("---- vertex source ----\n{}\n---- fragment source ----\n{}", vs, fs);
++                }
++            } else if verbose {
++                println!("ok   {}", name);
++            }
++        }
++    }
++    println!("compile_shaders: {} of {} variants failed", failed, total);
++    failed
++}
+diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
+index c0b483b219df..369688486611 100644
+--- a/gfx/wr/wrench/src/main.rs
++++ b/gfx/wr/wrench/src/main.rs
+@@ -25,6 +25,7 @@ mod rawtests;
+ mod reftest;
+ mod test_invalidation;
+ mod test_shaders;
++mod compile_shaders;
+ mod wrench;
+ mod yaml_frame_reader;
+ mod yaml_helper;
+@@ -941,6 +942,12 @@ impl ApplicationHandler for WrenchApp {
+                 test_shaders::test_shaders();
+                 event_loop.exit();
+             }
++            "compile_shaders" => {
++                let failed = compile_shaders::compile_shaders(window.gl(), self.verbose);
++                wrench.renderer.deinit();
++                self.exit_code = failed as i32;
++                event_loop.exit();
++            }
+             other => panic!("Unknown subcommand: {:?}", other),
+         }
+     }
+-- 
+2.56.0
+

@@ -1,0 +1,27 @@
+From 4e2a98aed596a4af64eba315c9ffc26aa74c45ae Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 19:36:26 +0000
+Subject: [PATCH 106/156] transplant-fix: SwapChain::Acquire braucht
+ TransferFunction (153er HDR-Drift, Offscreen-Hunk)
+
+---
+ gfx/gl/GLScreenBuffer.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/gl/GLScreenBuffer.cpp b/gfx/gl/GLScreenBuffer.cpp
+index 65c5848296bb..5643129bfc9b 100644
+--- a/gfx/gl/GLScreenBuffer.cpp
++++ b/gfx/gl/GLScreenBuffer.cpp
+@@ -178,7 +178,8 @@ bool GLScreenBuffer::Resize(const gfx::IntSize& size) {
+ 
+   mPresenter = nullptr;
+   mSize = size;
+-  mPresenter = mSwapChain->Acquire(size, gfx::ColorSpace2::SRGB);
++  mPresenter = mSwapChain->Acquire(size, gfx::ColorSpace2::SRGB,
++                                   gfx::TransferFunction::SRGB);
+   return bool(mPresenter);
+ }
+ 
+-- 
+2.56.0
+

@@ -1,0 +1,54 @@
+From d0856b5e88798ab105e5c8552130b987cbeb4698 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sun, 23 Aug 2026 16:19:19 +0000
+Subject: [PATCH 138/156] WindowGlobalParent: handle the in-process case in
+ CheckIfUnloadingIsCanceledForTraversable (no content process means a null
+ ContentParent; going back crashed)
+
+---
+ dom/ipc/WindowGlobalParent.cpp | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/dom/ipc/WindowGlobalParent.cpp b/dom/ipc/WindowGlobalParent.cpp
+index 150bce24b708..72f1487de2ba 100644
+--- a/dom/ipc/WindowGlobalParent.cpp
++++ b/dom/ipc/WindowGlobalParent.cpp
+@@ -989,10 +989,33 @@ class CheckPermitUnloadRequest final : public PromiseNativeHandler,
+           WrapNotNull(aDocShellLoadState);
+       if (mAction ==
+           nsIDocumentViewer::PermitUnloadAction::eDontPromptAndUnload) {
+-        cp->SendDispatchNavigateToTraversable(bc, loadState, resolve, reject);
+-      } else {
++        if (cp) {
++          cp->SendDispatchNavigateToTraversable(bc, loadState, resolve, reject);
++        } else {
++          // In-process embedders (e.g. EmbedLite) have no content process;
++          // do locally what RecvDispatchNavigateToTraversable would do.
++          NS_DispatchToMainThread(NS_NewRunnableFunction(
++              "DispatchNavigateToTraversable",
++              [bc = RefPtr{bc}, loadState, resolve]() {
++                if (!bc || !bc->GetDocShell()) {
++                  resolve(nsIDocumentViewer::eContinue);
++                  return;
++                }
++                RefPtr docShell = nsDocShell::Cast(bc->GetDocShell());
++                resolve(docShell->MaybeFireTraversableTraverseHistory(
++                    MOZ_KnownLive(loadState.get()), Nothing()));
++              }));
++        }
++      } else if (cp) {
+         cp->SendDispatchBeforeUnloadToSubtree(bc, Some(loadState), resolve,
+                                               reject);
++      } else {
++        NS_DispatchToMainThread(NS_NewRunnableFunction(
++            "DispatchBeforeUnloadToSubtree",
++            [bc = RefPtr{bc}, loadState, resolve]() {
++              ContentChild::DispatchBeforeUnloadToSubtree(bc, Some(loadState),
++                                                          resolve);
++            }));
+       }
+     } else {
+       bc->PreOrderWalk([&](dom::BrowsingContext* aBC) {
+-- 
+2.56.0
+

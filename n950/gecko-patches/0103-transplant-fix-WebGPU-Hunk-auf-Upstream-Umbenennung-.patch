@@ -1,0 +1,26 @@
+From 9ae9205f8669e1c36f7da254b04033000809602c Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 18:28:13 +0000
+Subject: [PATCH 103/156] transplant-fix: WebGPU-Hunk auf Upstream-Umbenennung
+ (ExternalTexture->SharedTexture in SwapChain)
+
+---
+ dom/webgpu/CanvasContext.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dom/webgpu/CanvasContext.cpp b/dom/webgpu/CanvasContext.cpp
+index 250978c94b4b..39458c6f0e50 100644
+--- a/dom/webgpu/CanvasContext.cpp
++++ b/dom/webgpu/CanvasContext.cpp
+@@ -152,7 +152,7 @@ void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aConfig,
+   }
+ #elif defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
+   // Other Linux widget toolkits do not build the GTK DMA-BUF backend.
+-  mUseExternalTextureInSwapChain = false;
++  mUseSharedTextureInSwapChain = false;
+ #endif
+ 
+   mCurrentTexture = aConfig.mDevice->InitSwapChain(
+-- 
+2.56.0
+

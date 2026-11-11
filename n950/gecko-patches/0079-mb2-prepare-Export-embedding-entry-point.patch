@@ -1,0 +1,26 @@
+From 810dfd86bd3094fd8b303a91a2ede430d7b891d9 Mon Sep 17 00:00:00 2001
+From: Andrew Branson <andrew.branson@jolla.com>
+Date: Mon, 10 Aug 2026 18:30:56 +0200
+Subject: [PATCH 079/156] *mb2-prepare* Export embedding entry point
+
+ESR140 restricts libxul exports with an explicit symbol list.
+Export the EmbedLite accessor so external embedding clients can link.
+
+Mb2-scrape: filename=0106-sailfishos-embedlite-Export-embedding-entry-point.patch
+---
+ toolkit/library/libxul.symbols | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/toolkit/library/libxul.symbols b/toolkit/library/libxul.symbols
+index e63e3e74426b..167ddb9cf349 100644
+--- a/toolkit/library/libxul.symbols
++++ b/toolkit/library/libxul.symbols
+@@ -1,4 +1,5 @@
+ XRE_GetBootstrap
++XRE_GetEmbedLite
+ uprofiler_get
+ #ifdef XP_IOS
+ MainProcessInit
+-- 
+2.56.0
+

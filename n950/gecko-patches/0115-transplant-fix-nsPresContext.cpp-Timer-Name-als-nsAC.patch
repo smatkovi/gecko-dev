@@ -1,0 +1,27 @@
+From e3eee48c04dcc5dfd8e456ce2e4fc19b592a09f6 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 01:30:41 +0000
+Subject: [PATCH 115/156] transplant-fix: nsPresContext.cpp - Timer-Name als
+ nsACString (_ns) im EmbedLite-Hunk "Restore fallback NotifyDidPaint timer";
+ NS_NewTimerWithCallback nimmt const nsACString& statt const char*
+
+---
+ layout/base/nsPresContext.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/layout/base/nsPresContext.cpp b/layout/base/nsPresContext.cpp
+index b827b68eab9e..ed6538d6b77c 100644
+--- a/layout/base/nsPresContext.cpp
++++ b/layout/base/nsPresContext.cpp
+@@ -3188,7 +3188,7 @@ void nsRootPresContext::EnsureEventualDidPaintEvent(
+         weakThis->NotifyDidPaintForSubtree(aTransactionId);
+       },
+       100, nsITimer::TYPE_ONE_SHOT,
+-      "nsRootPresContext::NotifyDidPaintForSubtree",
++      "nsRootPresContext::NotifyDidPaintForSubtree"_ns,
+       GetMainThreadSerialEventTarget());
+ 
+   if (NS_SUCCEEDED(rv)) {
+-- 
+2.56.0
+

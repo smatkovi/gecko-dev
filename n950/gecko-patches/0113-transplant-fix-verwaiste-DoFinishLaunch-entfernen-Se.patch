@@ -1,0 +1,35 @@
+From b155b3d6f65504e658d393cff82ae27e26989789 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 23:20:20 +0000
+Subject: [PATCH 113/156] transplant-fix: verwaiste DoFinishLaunch entfernen
+ (Serie-Definition ohne Deklaration; Upstream raeumt FDs selbst auf)
+
+---
+ ipc/glue/GeckoChildProcessHost.cpp | 11 -----------
+ 1 file changed, 11 deletions(-)
+
+diff --git a/ipc/glue/GeckoChildProcessHost.cpp b/ipc/glue/GeckoChildProcessHost.cpp
+index 49d6aa32b4d6..d0ceb8032599 100644
+--- a/ipc/glue/GeckoChildProcessHost.cpp
++++ b/ipc/glue/GeckoChildProcessHost.cpp
+@@ -1164,17 +1164,6 @@ void BaseProcessLauncher::MapChildLogging() {
+   }
+ }
+ 
+-#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+-Result<Ok, LaunchError> BaseProcessLauncher::DoFinishLaunch() {
+-  // We're in the parent and the child was launched. Clean up any FDs which were
+-  // transferred to the child in the parent as soon as possible, which will
+-  // allow the parent to detect when the child closes its handle (either due to
+-  // normal exit or due to crash).
+-  mChildArgs.mFiles.clear();
+-
+-  return Ok();
+-}
+-#endif
+ 
+ #if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ Result<Ok, LaunchError> LinuxProcessLauncher::DoSetup() {
+-- 
+2.56.0
+

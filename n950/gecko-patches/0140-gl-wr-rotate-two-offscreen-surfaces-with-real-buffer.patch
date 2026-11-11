@@ -1,0 +1,244 @@
+From e8073d79fa351e351809ec1f0bf776586e62fda6 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Mon, 24 Aug 2026 13:42:08 +0000
+Subject: [PATCH 140/156] gl,wr: rotate two offscreen surfaces with real buffer
+ age and partial present
+
+The EmbedLite offscreen path allocated a fresh SharedSurface every frame and
+reported buffer age 0, so picture caching could never reuse anything and every
+frame was drawn in full. Now:
+
+- SwapChain keeps a pool of two surfaces on EmbedLite and gives each one a
+  stable id, so a recycled allocation cannot be mistaken for the same buffer.
+- Age is counted in published frames (MarkFramePublished from PublishFrame),
+  not in Acquire() calls - PublishFrame reacquires immediately, so counting
+  acquisitions gave roughly twice the real age.
+- RenderCompositorEGL reports that age and enables partial present, which is
+  what makes WebRender look at the age at all ("only relevant if partial
+  present is active", renderer/mod.rs).
+- RequestFullRender() now only forces a full frame when the target surface
+  changed, instead of always.
+- gfxPlatform sets gfxVars::UseEGL for MOZ_EMBEDLITE; only the GTK backend did
+  that, so RenderCompositorEGL::Create() bailed out on its first line and the
+  hardware path was never entered.
+- embedding.js: prefer GLES (Adreno is GLES-only), enable partial present rects
+  and, importantly, layers.acceleration.disabled=false - with it true WebRender
+  silently falls back to software and none of the above has any effect.
+
+scroll2.html, 20s of scrolling on Xperia 10 V:
+  software WebRender:  med 16.3  p95 17.3  max 199.8  2/400 over 32ms
+  this patch:          med 16.3  p95 17.2  max 17.3   0/400
+---
+ gfx/gl/GLScreenBuffer.cpp                     | 27 +++++++++++++++----
+ gfx/gl/GLScreenBuffer.h                       | 26 ++++++++++++++++--
+ gfx/gl/SharedSurface.h                        |  7 +++++
+ .../RenderCompositorEGL.cpp                   | 27 ++++++++++---------
+ gfx/webrender_bindings/RenderCompositorEGL.h  |  1 +
+ 5 files changed, 69 insertions(+), 19 deletions(-)
+
+diff --git a/gfx/gl/GLScreenBuffer.cpp b/gfx/gl/GLScreenBuffer.cpp
+index f9b62512ebe6..60d53c91854e 100644
+--- a/gfx/gl/GLScreenBuffer.cpp
++++ b/gfx/gl/GLScreenBuffer.cpp
+@@ -53,14 +53,16 @@ UniquePtr<SwapChainPresenter> SwapChain::Acquire(
+     }
+   }
+ 
+-  ++mAcquireCounter;
+   {
+-    const auto it = mLastAcquired.find(surf.get());
++    // Age is counted in published frames, not in Acquire() calls: PublishFrame()
++    // drops the presenter and immediately reacquires, so Acquire() runs about
++    // twice per frame and would report a bogus age.
++    const auto it = mLastAcquired.find(surf->mSurfaceId);
+     mLastAcquiredAge =
+         (it == mLastAcquired.end())
+             ? 0
+-            : static_cast<size_t>(mAcquireCounter - it->second);
+-    mLastAcquired[surf.get()] = mAcquireCounter;
++            : static_cast<size_t>(mFrameCounter - it->second);
++    mPendingSurfaceId = surf->mSurfaceId;
+   }
+ 
+   auto ret = MakeUnique<SwapChainPresenter>(*this);
+@@ -69,11 +71,19 @@ UniquePtr<SwapChainPresenter> SwapChain::Acquire(
+   return ret;
+ }
+ 
++void SwapChain::MarkFramePublished() {
++  ++mFrameCounter;
++  if (mPendingSurfaceId) {
++    mLastAcquired[mPendingSurfaceId] = mFrameCounter;
++  }
++}
++
+ void SwapChain::ClearPool() {
+   mPool = {};
+   mPrevFrontBuffer = nullptr;
+   mLastAcquired.clear();
+   mLastAcquiredAge = 0;
++  mPendingSurfaceId = 0;
+ }
+ 
+ bool SwapChain::StoreRecycledSurface(
+@@ -138,7 +148,13 @@ SwapChain::SwapChain()
+     :  // We need to apply pooling on Android because of the AndroidSurface slow
+        // destructor bugs. They cause a noticeable performance hit. See bug
+        // #1646073.
+-      mPoolLimit(kIsAndroid ? 4 : 0) {}
++      mPoolLimit(
++#ifdef MOZ_EMBEDLITE
++          2
++#else
++          kIsAndroid ? 4 : 0
++#endif
++          ) {}
+ 
+ SwapChain::~SwapChain() {
+   if (mPresenter) {
+@@ -201,6 +217,7 @@ bool GLScreenBuffer::PublishFrame(const gfx::IntSize& size) {
+   }
+ 
+   mPresenter = nullptr;
++  mSwapChain->MarkFramePublished();
+   return Resize(size);
+ }
+ 
+diff --git a/gfx/gl/GLScreenBuffer.h b/gfx/gl/GLScreenBuffer.h
+index 631d0a4d3667..f497097f03e1 100644
+--- a/gfx/gl/GLScreenBuffer.h
++++ b/gfx/gl/GLScreenBuffer.h
+@@ -66,8 +66,9 @@ class SwapChain final {
+       mPrevFrontBuffer;  // Hold this ref while it's in-flight.
+  private:
+   SwapChainPresenter* mPresenter = nullptr;
+-  uint64_t mAcquireCounter = 0;
+-  std::unordered_map<const SharedSurface*, uint64_t> mLastAcquired;
++  uint64_t mFrameCounter = 0;
++  uint64_t mPendingSurfaceId = 0;
++  std::unordered_map<uint64_t, uint64_t> mLastAcquired;
+   size_t mLastAcquiredAge = 0;
+ 
+  public:
+@@ -84,6 +85,9 @@ class SwapChain final {
+ 
+   void ClearPool();
+   bool StoreRecycledSurface(const std::shared_ptr<SharedSurface>& surf);
++
++  // Call once per published frame; ages are counted in these.
++  void MarkFramePublished();
+   const auto& FrontBuffer() const { return mFrontBuffer; }
+ 
+   // Age of the surface handed out by the most recent Acquire(): how many
+@@ -116,11 +120,29 @@ class GLScreenBuffer final {
+   bool PublishFrame(const gfx::IntSize&);
+   const gfx::IntSize& Size() const { return mSize; }
+   const std::shared_ptr<SharedSurface>& FrontBuffer() const;
++
++  // The surface currently being rendered into, for producer-side fencing.
++  const std::shared_ptr<SharedSurface>& BackBuffer() const {
++    static const std::shared_ptr<SharedSurface> kNone;
++    return mPresenter ? mPresenter->BackBuffer() : kNone;
++  }
+   // Age of the surface the swap chain handed out most recently; see
+   // SwapChain::LastAcquiredAge(). 0 means "contents unknown".
+   size_t LastAcquiredAge() const {
+     return mSwapChain ? mSwapChain->LastAcquiredAge() : 0;
+   }
++
++  // Hand a surface back for reuse; with pooling disabled the owner of the
++  // swap chain is responsible for recycling (see SwapChain::Acquire).
++  bool StoreRecycledSurface(const std::shared_ptr<SharedSurface>& surf) {
++    return mSwapChain ? mSwapChain->StoreRecycledSurface(surf) : false;
++  }
++
++  void MarkFramePublished() {
++    if (mSwapChain) {
++      mSwapChain->MarkFramePublished();
++    }
++  }
+   GLuint Fb() const;
+ };
+ 
+diff --git a/gfx/gl/SharedSurface.h b/gfx/gl/SharedSurface.h
+index aad2188931f3..86fb94b44225 100644
+--- a/gfx/gl/SharedSurface.h
++++ b/gfx/gl/SharedSurface.h
+@@ -78,10 +78,17 @@ struct SharedSurfaceDesc : public PartialSharedSurfaceDesc {
+ };
+ 
+ class SharedSurface {
++ private:
++  static inline uint64_t sLastSurfaceId = 0;
++
+  public:
++  // Unique per surface instance. Recycled surfaces are freed and reallocated,
++  // so a pointer is not a stable identity for age tracking.
++  const uint64_t mSurfaceId = ++sLastSurfaceId;
+   const SharedSurfaceDesc mDesc;
+   const UniquePtr<MozFramebuffer> mFb;  // null if we should use fb=0.
+ 
++
+  protected:
+   bool mIsLocked = false;
+   bool mIsProducerAcquired = false;
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index b34f4e90b0e5..99650fe83686 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -401,13 +401,10 @@ LayoutDeviceIntSize RenderCompositorEGL::GetBufferSize() {
+ 
+ bool RenderCompositorEGL::UsePartialPresent() {
+ #ifdef MOZ_EMBEDLITE
+-  static bool sLogged = false;
+-  if (!sLogged) { sLogged = true; gfxCriticalNote << "EL-PP RenderCompositorEGL active, partial OFF"; }
+-  // Embedding rendert in die SharedSurface-Rotation ohne echte
+-  // Swapchain-Age-Semantik - Partial Present frisst dort Pixel
+-  // (wachsende schwarze Loecher). Hart aus, unabhaengig vom Widget:
+-  // der Nachfolger-Renderer haelt nicht immer das EmbedLite-Widget.
+-  return false;
++  // Buffer-Age ist laut WebRender-Doku nur relevant, wenn Partial Present
++  // aktiv ist ("otherwise 0 should be passed here"). Mit rotierendem Pool und
++  // MarkFramePublished-Zaehler liefert GetBufferAge() jetzt echte Werte.
++  return gfx::gfxVars::WebRenderMaxPartialPresentRects() > 0;
+ #else
+   return gfx::gfxVars::WebRenderMaxPartialPresentRects() > 0;
+ #endif
+@@ -415,11 +412,17 @@ bool RenderCompositorEGL::UsePartialPresent() {
+ 
+ bool RenderCompositorEGL::RequestFullRender() {
+ #ifdef MOZ_EMBEDLITE
+-  // Surface-Fabrik: jeder Frame ein fabrikneues (schwarzes) FBO - Picture-
+-  // Cache darf nie annehmen, das Ziel enthalte den letzten Frame. Ohne das
+-  // zeichnen APZ-Composites (Touch!) nur Dirty-Tiles in leere Buffer:
+-  // 68-88%-Schwarz-Degradation exakt bei Beruehrung.
+-  return true;
++  // Mit rotierendem Surface-Pool enthaelt das Ziel den vorletzten Frame.
++  // Picture Cache darf Kacheln nur wiederverwenden, wenn in denselben Puffer
++  // gezeichnet wird wie zuletzt; sonst muss der Frame komplett neu.
++  if (mUseEmbedLiteOffscreen && gl() && gl()->Screen()) {
++    if (const auto& back = gl()->Screen()->BackBuffer()) {
++      const bool sameSurface = (back->mSurfaceId == mLastRenderedSurfaceId);
++      mLastRenderedSurfaceId = back->mSurfaceId;
++      return !sameSurface;
++    }
++  }
++  return false;
+ #else
+   return false;
+ #endif
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.h b/gfx/webrender_bindings/RenderCompositorEGL.h
+index 7956b2ce35eb..7fa1190422b0 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.h
++++ b/gfx/webrender_bindings/RenderCompositorEGL.h
+@@ -60,6 +60,7 @@ class RenderCompositorEGL : public RenderCompositor {
+ 
+   EGLSurface mEGLSurface;
+   bool mUseEmbedLiteOffscreen;
++  mutable uint64_t mLastRenderedSurfaceId = 0;
+ 
+   // Whether we are in the process of handling a NEW_SURFACE error. On Android
+   // this is used to allow the widget an opportunity to recover from the first
+-- 
+2.56.0
+

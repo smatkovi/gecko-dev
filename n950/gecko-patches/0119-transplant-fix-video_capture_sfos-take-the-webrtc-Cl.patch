@@ -1,0 +1,80 @@
+From d557cb8cad66747ab8eaaf5aaf2b655a5bb2804b Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 06:39:18 +0000
+Subject: [PATCH 119/156] transplant-fix: video_capture_sfos - take the
+ webrtc::Clock from VideoCaptureImpl::Create and the constructor (libwebrtc
+ injects the clock now; GetRealTimeClockRaw is gone)
+
+---
+ .../video_capture/sfos/video_capture_sfos.cc        | 13 ++++++++-----
+ .../modules/video_capture/sfos/video_capture_sfos.h |  6 +++++-
+ 2 files changed, 13 insertions(+), 6 deletions(-)
+
+diff --git a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+index f5fd898a0b78..a15d4538849f 100644
+--- a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
++++ b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+@@ -19,8 +19,8 @@ namespace webrtc {
+ namespace videocapturemodule {
+ 
+ webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+-    const char* device_unique_id_utf8) {
+-  auto implementation = webrtc::make_ref_counted<VideoCaptureModuleSFOS>();
++    Clock* clock, const char* device_unique_id_utf8) {
++  auto implementation = webrtc::make_ref_counted<VideoCaptureModuleSFOS>(clock);
+   if (implementation->Init(device_unique_id_utf8) != 0) {
+     return nullptr;
+   }
+@@ -28,11 +28,14 @@ webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+ }
+ 
+ webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+-    VideoCaptureOptions* /* options */,
++    Clock* clock, VideoCaptureOptions* /* options */,
+     const char* device_unique_id_utf8) {
+-  return Create(device_unique_id_utf8);
++  return Create(clock, device_unique_id_utf8);
+ }
+ 
++VideoCaptureModuleSFOS::VideoCaptureModuleSFOS(Clock* clock)
++    : VideoCaptureImpl(clock), sfos_clock_(clock) {}
++
+ VideoCaptureModuleSFOS::~VideoCaptureModuleSFOS() {
+   if (camera_) {
+     // stopCapture() is the provider's synchronous callback-quiescence point.
+@@ -187,7 +190,7 @@ void VideoCaptureModuleSFOS::onCameraFrame(
+     return;
+   }
+ 
+-  Clock* clock = Clock::GetRealTimeClockRaw();
++  Clock* clock = sfos_clock_;
+   int64_t capture_time_ms = clock->CurrentNtpInMilliseconds();
+   if (timestamp_us) {
+     const int64_t frame_time_ms =
+diff --git a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.h b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.h
+index 3f43f9ff45b5..be29cd361708 100644
+--- a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.h
++++ b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.h
+@@ -18,7 +18,7 @@ namespace videocapturemodule {
+ class VideoCaptureModuleSFOS : public VideoCaptureImpl,
+                                public gecko::camera::CameraListener {
+  public:
+-  VideoCaptureModuleSFOS() = default;
++  explicit VideoCaptureModuleSFOS(Clock* clock);
+   ~VideoCaptureModuleSFOS() override;
+ 
+   int32_t Init(const char* device_unique_id_utf8);
+@@ -36,6 +36,10 @@ class VideoCaptureModuleSFOS : public VideoCaptureImpl,
+ 
+   unsigned int sensor_mount_angle_ = 0;
+   std::shared_ptr<gecko::camera::Camera> camera_;
++
++ private:
++  // VideoCaptureImpl::clock_ is private; keep our own copy of the injected clock.
++  Clock* const sfos_clock_;
+ };
+ 
+ }  // namespace videocapturemodule
+-- 
+2.56.0
+

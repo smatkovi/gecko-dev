@@ -1,0 +1,42 @@
+From b1a3bc390ff5569411272b0590030305652efa23 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 21:03:29 +0000
+Subject: [PATCH 133/156] WebAuthnPromptHelper: without prompt UI, ignore
+ informational prompts and auto-select the first entry instead of cancelling
+
+---
+ toolkit/modules/WebAuthnPromptHelper.sys.mjs | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/toolkit/modules/WebAuthnPromptHelper.sys.mjs b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+index b0b69ff0ab25..2219d2ce0637 100644
+--- a/toolkit/modules/WebAuthnPromptHelper.sys.mjs
++++ b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+@@ -199,6 +199,11 @@ export let WebAuthnPromptHelper = {
+   },
+ 
+   select_sign_result(browsingContext, { origin, tid, prompt: { entities } }) {
++    if (!browsingContext.topChromeWindow?.PopupNotifications) {
++      // No chooser UI: take the first entry.
++      lazy.webauthnService.selectionCallback(tid, 0);
++      return;
++    }
+     let unknownAccount = this._l10n.formatValueSync(
+       "webauthn-select-sign-result-unknown-account"
+     );
+@@ -383,9 +388,9 @@ export let WebAuthnPromptHelper = {
+     // Embedders without the desktop doorhanger UI (e.g. EmbedLite) only get
+     // the modal PIN prompts; the informational prompts are skipped.
+     if (!browsingContext.topChromeWindow?.PopupNotifications) {
+-      // Nothing can be shown; cancel the transaction instead of leaving the
+-      // authenticator waiting for an answer that never comes.
+-      lazy.webauthnService.cancel(tid);
++      // Informational prompts (presence, already-registered, blocked) need
++      // no answer; the authenticator keeps waiting for the user. Selection
++      // prompts are answered in select_sign_result before reaching here.
+       return;
+     }
+ 
+-- 
+2.56.0
+

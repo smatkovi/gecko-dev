@@ -1,0 +1,57 @@
+From e510bc46612b32e107c06cdead1950b21bb68689 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 16:49:28 +0000
+Subject: [PATCH 097/156] transplant-fix: SafeArea Teil 4 - Feld ins richtige
+ Struct (startswith-Fanggriff), Value-Randpfade entfernt
+
+---
+ servo/components/style/custom_properties.rs | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/servo/components/style/custom_properties.rs b/servo/components/style/custom_properties.rs
+index 426f7621664d..ca1dce267e21 100644
+--- a/servo/components/style/custom_properties.rs
++++ b/servo/components/style/custom_properties.rs
+@@ -790,7 +790,6 @@ struct SubstitutionFunctionReference {
+     prev_token_type: TokenSerializationType,
+     next_token_type: TokenSerializationType,
+     substitution_kind: SubstitutionFunctionKind,
+-    safe_area_inset_usage: u8,
+ }
+ 
+ /// A struct holding information about the external references to that a custom
+@@ -2564,7 +2563,6 @@ fn substitute_references_if_needed_and_apply(
+                 substitution.last_token_type,
+             )));
+             value.attr_tainted |= substitution.attr_tainted;
+-            value.safe_area_inset_usage |= substitution.safe_area_inset_usage;
+             substitution_functions.insert_attr(name, value);
+         },
+         SubstitutionFunctionKind::Env => unreachable!("Kind cannot be env."),
+@@ -2577,6 +2575,7 @@ struct Substitution<'a> {
+     first_token_type: TokenSerializationType,
+     last_token_type: TokenSerializationType,
+     attr_tainted: bool,
++    safe_area_inset_usage: u8,
+ }
+ 
+ impl<'a> Substitution<'a> {
+@@ -2604,7 +2603,6 @@ impl<'a> Substitution<'a> {
+                 self.last_token_type,
+             )));
+             value.attr_tainted |= self.attr_tainted;
+-            value.safe_area_inset_usage |= self.safe_area_inset_usage;
+             return Ok(value);
+         }
+         let taint = if self.attr_tainted {
+@@ -2618,7 +2616,6 @@ impl<'a> Substitution<'a> {
+         };
+         let mut v = compute_value(&self.css, url_data, registration, computed_context, taint)?;
+         v.attr_tainted |= self.attr_tainted;
+-        v.safe_area_inset_usage |= self.safe_area_inset_usage;
+         Ok(v)
+     }
+ 
+-- 
+2.56.0
+

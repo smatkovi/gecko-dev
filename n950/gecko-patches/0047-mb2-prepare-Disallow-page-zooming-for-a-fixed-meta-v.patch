@@ -1,0 +1,168 @@
+From 83897a73673a1b396e76ce0e35fc7a117d1e5a5b Mon Sep 17 00:00:00 2001
+From: Andrew den Exter <andrew.den.exter@jolla.com>
+Date: Thu, 11 Nov 2021 06:51:59 +0000
+Subject: [PATCH 047/156] *mb2-prepare* Disallow page zooming for a fixed meta
+ viewport
+
+Respect fixed meta viewport scales and user-scalable=no when deciding whether
+APZ may zoom a document. Continue to allow zooming in responsive-design mode
+and when EmbedLite forces the top-level browsing context into desktop mode.
+
+JB#56149 OMP#JOLLA-49
+JB#56767 OMP#JOLLA-609
+
+Mb2-scrape: filename=0060-Disallow-page-zooming-if-the-meta-viewport-scale-is-.patch
+---
+ dom/media/platforms/PDMFactory.cpp         |  7 -------
+ dom/media/systemservices/CamerasParent.cpp |  6 ------
+ dom/media/systemservices/VideoEngine.cpp   |  6 ------
+ layout/base/nsLayoutUtils.cpp              | 18 +++++++++++++++++-
+ 4 files changed, 17 insertions(+), 20 deletions(-)
+
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index 0c540b93342b..2013d3072432 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -53,17 +53,13 @@
+ #ifdef MOZ_OMX
+ #  include "OmxDecoderModule.h"
+ #endif
+-<<<<<<< HEAD
+-=======
+ #ifdef MOZ_ENABLE_WEBRTC_GECKOCAMERA
+ #  include "gecko-camera/GeckoCameraDecoderModule.h"
+ #endif
+ #include "FFVPXRuntimeLinker.h"
+ 
+->>>>>>> 5f06748f9db5 (*mb2-prepare* Add a video decoder based on gecko-camera. JB#56755)
+ #include <functional>
+ 
+-#include "FFVPXRuntimeLinker.h"
+ 
+ using DecodeSupport = mozilla::media::DecodeSupport;
+ using DecodeSupportSet = mozilla::media::DecodeSupportSet;
+@@ -172,14 +168,11 @@ class PDMInitializer final {
+     }
+ #endif  // !defined(MOZ_WIDGET_ANDROID)
+ 
+-<<<<<<< HEAD
+     RemoteMediaManagerChild::Init();
+-=======
+ #ifdef MOZ_ENABLE_WEBRTC_GECKOCAMERA
+     GeckoCameraDecoderModule::Init();
+ #endif
+     RemoteDecoderManagerChild::Init();
+->>>>>>> 5f06748f9db5 (*mb2-prepare* Add a video decoder based on gecko-camera. JB#56755)
+   }
+ 
+   static void InitDefaultPDMs() {
+diff --git a/dom/media/systemservices/CamerasParent.cpp b/dom/media/systemservices/CamerasParent.cpp
+index 1ac5ccd05055..adae99d75bcf 100644
+--- a/dom/media/systemservices/CamerasParent.cpp
++++ b/dom/media/systemservices/CamerasParent.cpp
+@@ -30,11 +30,8 @@
+ #include "nsIPermissionManager.h"
+ #include "nsIThread.h"
+ #include "nsNetUtil.h"
+-<<<<<<< HEAD
+ #include "nsThreadUtils.h"
+ #include "video_engine/desktop_capture_impl.h"
+-=======
+->>>>>>> b27b8de994f1 (*mb2-prepare* Disable desktop sharing for EmbedLite)
+ #include "video_engine/video_capture_factory.h"
+ 
+ #if defined(_WIN32)
+@@ -889,9 +886,7 @@ VideoEngine* CamerasParent::EnsureInitialized(CaptureEngine aEngine) {
+     return nullptr;
+   }
+ 
+-<<<<<<< HEAD
+   if (VideoEngine* engine = mEngines->ElementAt(aEngine); engine) {
+-=======
+ #ifdef MOZ_EMBEDLITE
+   if (capEngine != CameraEngine) {
+     LOG("Capture engine %d is not supported by EmbedLite", aEngine);
+@@ -900,7 +895,6 @@ VideoEngine* CamerasParent::EnsureInitialized(CaptureEngine aEngine) {
+ #endif
+ 
+   if (VideoEngine* engine = mEngines->ElementAt(capEngine); engine) {
+->>>>>>> b27b8de994f1 (*mb2-prepare* Disable desktop sharing for EmbedLite)
+     return engine;
+   }
+ 
+diff --git a/dom/media/systemservices/VideoEngine.cpp b/dom/media/systemservices/VideoEngine.cpp
+index f96f49aa6e21..9d3327cc5955 100644
+--- a/dom/media/systemservices/VideoEngine.cpp
++++ b/dom/media/systemservices/VideoEngine.cpp
+@@ -5,15 +5,12 @@
+ #include "VideoEngine.h"
+ 
+ #include "libwebrtcglue/SystemTime.h"
+-<<<<<<< HEAD
+ #include "video_engine/desktop_capture_impl.h"
+-=======
+ #include "system_wrappers/include/clock.h"
+ 
+ #ifndef MOZ_EMBEDLITE
+ #  include "video_engine/desktop_capture_impl.h"
+ #endif
+->>>>>>> b27b8de994f1 (*mb2-prepare* Disable desktop sharing for EmbedLite)
+ 
+ #ifdef MOZ_WIDGET_ANDROID
+ #  include "mozilla/jni/Utils.h"
+@@ -134,8 +131,6 @@ already_AddRefed<VideoEngine> VideoEngine::Create(
+       new VideoEngine(aCaptureDeviceType, std::move(aVideoCaptureFactory)));
+ }
+ 
+-<<<<<<< HEAD
+-=======
+ VideoEngine::CaptureEntry::CaptureEntry(
+     int32_t aCapnum, rtc::scoped_refptr<webrtc::VideoCaptureModule> aCapture,
+     webrtc::DesktopCaptureImpl* aDesktopImpl)
+@@ -183,7 +178,6 @@ bool VideoEngine::WithEntry(
+   return true;
+ }
+ 
+->>>>>>> b27b8de994f1 (*mb2-prepare* Disable desktop sharing for EmbedLite)
+ int32_t VideoEngine::GenerateId() {
+   // XXX Something better than this (a map perhaps, or a simple boolean TArray,
+   // given the number in-use is O(1) normally!)
+diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
+index aa6ef4435df0..0d3455f7cc0a 100644
+--- a/layout/base/nsLayoutUtils.cpp
++++ b/layout/base/nsLayoutUtils.cpp
+@@ -696,6 +696,20 @@ bool nsLayoutUtils::AsyncPanZoomEnabled(const nsIFrame* aFrame) {
+   return widget->AsyncPanZoomEnabled();
+ }
+ 
++static bool DocumentDisallowsZooming(const Document* aDocument) {
++  const ViewportMetaData metaData = aDocument->GetViewportMetaData();
++  return (!metaData.mMinimumScale.IsEmpty() &&
++          metaData.mMinimumScale == metaData.mMaximumScale) ||
++         metaData.mUserScalable.EqualsLiteral("0") ||
++         metaData.mUserScalable.EqualsLiteral("no") ||
++         metaData.mUserScalable.EqualsLiteral("false");
++}
++
++static bool IsDesktopView(const Document* aDocument) {
++  BrowsingContext* bc = aDocument->GetBrowsingContext();
++  return bc && bc->Top()->ForceDesktopViewport();
++}
++
+ bool nsLayoutUtils::AllowZoomingForDocument(
+     const mozilla::dom::Document* aDocument) {
+   if (aDocument->GetPresShell() &&
+@@ -705,7 +719,9 @@ bool nsLayoutUtils::AllowZoomingForDocument(
+   // True if we allow zooming for all documents on this platform, or if we are
+   // in RDM.
+   BrowsingContext* bc = aDocument->GetBrowsingContext();
+-  return StaticPrefs::apz_allow_zooming() || (bc && bc->InRDMPane());
++  return (StaticPrefs::apz_allow_zooming() &&
++          !DocumentDisallowsZooming(aDocument)) ||
++         (bc && bc->InRDMPane()) || IsDesktopView(aDocument);
+ }
+ 
+ static bool HasVisibleAnonymousContents(Document* aDoc) {
+-- 
+2.56.0
+

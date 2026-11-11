@@ -1,0 +1,27 @@
+From 3e173ff057145b2cebf0c828c246c0fa07327153 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 20:01:59 +0000
+Subject: [PATCH 107/156] transplant-fix: Compositor-Diamant bereinigt
+ (Controller-Basis doppelt nach Rebase - Base traegt sie in 153)
+
+---
+ gfx/layers/ipc/CompositorBridgeParent.h | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/gfx/layers/ipc/CompositorBridgeParent.h b/gfx/layers/ipc/CompositorBridgeParent.h
+index c709173d2500..a5468309c494 100644
+--- a/gfx/layers/ipc/CompositorBridgeParent.h
++++ b/gfx/layers/ipc/CompositorBridgeParent.h
+@@ -240,8 +240,7 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
+ MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(
+     CompositorBridgeParentBase::TransformsToSkip)
+ 
+-class CompositorBridgeParent : public CompositorBridgeParentBase,
+-                               public CompositorController {
++class CompositorBridgeParent : public CompositorBridgeParentBase {
+   friend class CompositorThreadHolder;
+   friend class InProcessCompositorSession;
+   friend class gfx::GPUProcessManager;
+-- 
+2.56.0
+

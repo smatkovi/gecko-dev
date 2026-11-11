@@ -1,0 +1,29 @@
+From 51c9524765cbc0ecf2fae753b5f7aed1036e0c8e Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 17:34:06 +0000
+Subject: [PATCH 126/156] WebAuthnPromptHelper: skip doorhanger prompts when
+ the embedder has no PopupNotifications (the modal PIN prompt still works)
+
+---
+ toolkit/modules/WebAuthnPromptHelper.sys.mjs | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/toolkit/modules/WebAuthnPromptHelper.sys.mjs b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+index 02d026777b1e..c20a6fa433ae 100644
+--- a/toolkit/modules/WebAuthnPromptHelper.sys.mjs
++++ b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+@@ -375,6 +375,11 @@ export let WebAuthnPromptHelper = {
+   ) {
+     this.reset();
+     this._tid = tid;
++    // Embedders without the desktop doorhanger UI (e.g. EmbedLite) only get
++    // the modal PIN prompts; the informational prompts are skipped.
++    if (!browsingContext.topChromeWindow?.PopupNotifications) {
++      return;
++    }
+ 
+     // We need to prevent some fullscreen transitions while WebAuthn prompts
+     // are shown. The `fullscreen-painted` topic is notified when DOM elements
+-- 
+2.56.0
+

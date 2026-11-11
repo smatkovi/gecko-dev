@@ -1,0 +1,40 @@
+From 2b3143d71d463bd2806944b08f41a86b8f036814 Mon Sep 17 00:00:00 2001
+From: Raine Makelainen <raine.makelainen@jolla.com>
+Date: Wed, 19 Aug 2020 14:27:21 +0300
+Subject: [PATCH 040/156] *mb2-prepare* Enable fullscreen for EmbedLite. Fixes
+ JB#44129
+
+EmbedLite's root docshell is not chrome.
+
+Keep the upstream rejection for non-Qt toolkits.
+
+Let Qt embedding continue through the fullscreen path.
+
+Signed-off-by: Raine Makelainen <raine.makelainen@jolla.com>
+Mb2-scrape: filename=0052-Make-fullscreen-enabling-work-as-used-to-with-pref-f.patch
+---
+ dom/base/nsGlobalWindowOuter.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
+index dae1134fa164..3566c01d043c 100644
+--- a/dom/base/nsGlobalWindowOuter.cpp
++++ b/dom/base/nsGlobalWindowOuter.cpp
+@@ -4254,10 +4254,14 @@ nsresult nsGlobalWindowOuter::SetFullscreenInternal(FullscreenReason aReason,
+   if (rootItem != mDocShell)
+     return window->SetFullscreenInternal(aReason, aFullscreen);
+ 
++  // EmbedLite's root docshell is not chrome. Allow Qt embedding to continue
++  // through the fullscreen path without changing the docshell item type.
++#ifndef MOZ_WIDGET_QT
+   // make sure we don't try to set full screen on a non-chrome window,
+   // which might happen in embedding world
+   if (mDocShell->ItemType() != nsIDocShellTreeItem::typeChrome)
+     return NS_ERROR_FAILURE;
++#endif
+ 
+   // FullscreenReason::ForForceExitFullscreen can only be used with exiting
+   // fullscreen
+-- 
+2.56.0
+

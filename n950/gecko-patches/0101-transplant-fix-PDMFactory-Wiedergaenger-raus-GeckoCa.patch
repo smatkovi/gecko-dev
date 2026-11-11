@@ -1,0 +1,25 @@
+From d99f9cfcec12c30c25f295b1f95240cd1f5ccbd5 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 17:45:25 +0000
+Subject: [PATCH 101/156] transplant-fix: PDMFactory-Wiedergaenger raus,
+ GeckoCamera bekommt 153er Supports-Override (delegiert auf SupportsMimeType)
+
+---
+ dom/media/platforms/PDMFactory.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index 2013d3072432..1aaa143205da 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -172,7 +172,6 @@ class PDMInitializer final {
+ #ifdef MOZ_ENABLE_WEBRTC_GECKOCAMERA
+     GeckoCameraDecoderModule::Init();
+ #endif
+-    RemoteDecoderManagerChild::Init();
+   }
+ 
+   static void InitDefaultPDMs() {
+-- 
+2.56.0
+

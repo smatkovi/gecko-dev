@@ -1,0 +1,31 @@
+From 3913152a7e5f8f4c0516675649ce657e08ad7f87 Mon Sep 17 00:00:00 2001
+From: Andrew Branson <andrew.branson@jolla.com>
+Date: Wed, 5 Aug 2026 17:49:09 +0200
+Subject: [PATCH 056/156] *mb2-prepare* Use EmbedLite helper app dialog static
+ registration
+
+Point the helper launcher contract at the EmbedLite ES module so downloads
+continue to use the Sailfish save-destination prompt.
+
+Mb2-scrape: filename=0077-Use-EmbedLite-helper-app-dialog-static-registration.patch
+---
+ toolkit/mozapps/downloads/components.conf | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/toolkit/mozapps/downloads/components.conf b/toolkit/mozapps/downloads/components.conf
+index ccaf5e46c189..64eba64ca262 100644
+--- a/toolkit/mozapps/downloads/components.conf
++++ b/toolkit/mozapps/downloads/components.conf
+@@ -6,7 +6,7 @@ Classes = [
+     {
+         'cid': '{F68578EB-6EC2-4169-AE19-8C6243F0ABE1}',
+         'contract_ids': ['@mozilla.org/helperapplauncherdialog;1'],
+-        'esModule': 'resource://gre/modules/HelperAppDlg.sys.mjs',
+-        'constructor': 'nsUnknownContentTypeDialog',
++        'esModule': 'resource://embedlite-components/HelperAppDialog.sys.mjs',
++        'constructor': 'HelperAppLauncherDialog',
+     },
+ ]
+-- 
+2.56.0
+

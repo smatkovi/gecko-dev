@@ -1,0 +1,72 @@
+From d0e32fe60f570bb8380686a3d68d3d1c657a2381 Mon Sep 17 00:00:00 2001
+From: Andrew Branson <andrew.branson@jolla.com>
+Date: Wed, 5 Aug 2026 17:49:59 +0200
+Subject: [PATCH 057/156] *mb2-prepare* Load EmbedLite search engines from
+ settings
+
+Skip Firefox's selector configuration for EmbedLite and restore persisted
+profile engines directly. Tolerate a missing application default while the
+EmbedLite search component populates a fresh profile.
+
+Mb2-scrape: filename=0078-Load-EmbedLite-search-engines-from-settings.patch
+---
+ .../components/search/SearchService.sys.mjs   | 23 +++++++++++++++----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/toolkit/components/search/SearchService.sys.mjs b/toolkit/components/search/SearchService.sys.mjs
+index 2d0f0d1d9b4e..5122f0d88dc9 100644
+--- a/toolkit/components/search/SearchService.sys.mjs
++++ b/toolkit/components/search/SearchService.sys.mjs
+@@ -1596,9 +1596,12 @@ export const SearchService = new (class SearchService {
+       this.#maybeThrowErrorInTest("LoadSettingsAddonManager");
+       const settings = await this._settings.get();
+ 
+-      initSection = "FetchEngines";
+-      this.#maybeThrowErrorInTest(initSection);
+-      const refinedConfig = await this._fetchEngineSelectorEngines();
++      let refinedConfig;
++      if (Services.appinfo.ID != "embedliteBrowser@embed.mozilla.org") {
++        initSection = "FetchEngines";
++        this.#maybeThrowErrorInTest(initSection);
++        refinedConfig = await this._fetchEngineSelectorEngines();
++      }
+ 
+       initSection = "LoadEngines";
+       this.#maybeThrowErrorInTest(initSection);
+@@ -1847,7 +1850,10 @@ export const SearchService = new (class SearchService {
+             return policyEngine;
+           }
+         }
+-        if (activePolicies.SearchEngines.Remove?.includes(defaultEngine.name)) {
++        if (
++          defaultEngine &&
++          activePolicies.SearchEngines.Remove?.includes(defaultEngine.name)
++        ) {
+           defaultEngine = null;
+         }
+       }
+@@ -1881,13 +1887,20 @@ export const SearchService = new (class SearchService {
+    *   The refined search configuration for this user.
+    */
+   async #loadEngines(settings, refinedConfig) {
++    lazy.logConsole.debug("#loadEngines: start");
++    if (Services.appinfo.ID == "embedliteBrowser@embed.mozilla.org") {
++      await this.#loadEnginesFromSettings(settings);
++      this._settings.migrateEngineIds(settings);
++      lazy.logConsole.debug("#loadEngines: done");
++      return;
++    }
++
+     // Get user's current settings and search engine before we load engines from
+     // config. These values will be compared after engines are loaded.
+     let prevMetaData = { ...settings?.metaData };
+     let prevCurrentEngineId = prevMetaData.defaultEngineId;
+     let prevAppDefaultEngineId = prevMetaData?.appDefaultEngineId;
+ 
+-    lazy.logConsole.debug("#loadEngines: start");
+     this.#setDefaultFromSelector(refinedConfig);
+ 
+     this.#loadEnginesFromConfig(refinedConfig.engines, settings);
+-- 
+2.56.0
+

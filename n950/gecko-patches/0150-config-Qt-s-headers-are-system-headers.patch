@@ -1,0 +1,66 @@
+From 01177cd4eb0de750aee8d8a0705dc430ea077be6 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:10:55 +0100
+Subject: [PATCH 150/156] config: Qt's headers are system headers
+
+Qt headers included under gcc_hidden.h's visibility(hidden) declare
+classes hidden first and Q_DECL_IMPORT (default) later; clang rejects
+that ("visibility does not match previous declaration"), GCC let it
+pass. As system headers they get the system wrappers, which include
+them with the default visibility.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ config/system-headers.mozbuild | 39 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/config/system-headers.mozbuild b/config/system-headers.mozbuild
+index 34d8245c5c29..edb3faa47802 100644
+--- a/config/system-headers.mozbuild
++++ b/config/system-headers.mozbuild
+@@ -1398,3 +1398,42 @@ if CONFIG["MOZ_PERFETTO"]:
+     system_headers += [
+         "sys/timerfd.h",
+     ]
++
++if CONFIG["MOZ_WIDGET_TOOLKIT"] == "qt":
++    system_headers += [
++        "QAbstractEventDispatcher",
++        "qabstracteventdispatcher.h",
++        "qevent.h",
++        "qfontinfo.h",
++        "qobject.h",
++        "qsocketnotifier.h",
++        "qthread.h",
++        "QByteArray",
++        "QColor",
++        "QCoreApplication",
++        "QDebug",
++        "QDesktopServices",
++        "QEvent",
++        "QFeedbackEffect",
++        "QFont",
++        "QGeoPositionInfoSource",
++        "QGuiApplication",
++        "QIcon",
++        "QObject",
++        "QPageLayout",
++        "QPalette",
++        "QPixmap",
++        "QRect",
++        "QRectF",
++        "QScreen",
++        "QSharedPointer",
++        "QString",
++        "QStringList",
++        "Qt",
++        "QTemporaryFile",
++        "QThread",
++        "QTimer",
++        "QTransform",
++        "QUrl",
++        "QWindow",
++    ]
+-- 
+2.56.0
+

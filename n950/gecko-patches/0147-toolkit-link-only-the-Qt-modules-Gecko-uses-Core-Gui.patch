@@ -1,0 +1,50 @@
+From eaed6fd153c0511c33eca6134cae45745bd8b7f4 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 11:44:50 +0100
+Subject: [PATCH 147/156] toolkit: link only the Qt modules Gecko uses (Core,
+ Gui)
+
+Network, Positioning, PrintSupport, Quick and Widgets were checked for and
+linked into libxul, but nothing in Gecko or EmbedLite includes them, and
+MOZ_ENABLE_QTNETWORK is set but never tested. On a phone with 1 GB of RAM
+every library loaded at startup counts; the embedder links its own Qt
+modules.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ toolkit/moz.configure | 12 +++++-------
+ 1 file changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/toolkit/moz.configure b/toolkit/moz.configure
+index a8a231f0245b..7c511a6394d4 100644
+--- a/toolkit/moz.configure
++++ b/toolkit/moz.configure
+@@ -597,20 +597,18 @@ def toolkit_qt(toolkit):
+ with only_when(toolkit_qt):
+     set_config("MOZ_ENABLE_QT", True)
+     set_define("MOZ_ENABLE_QT", True)
+-    set_config("MOZ_ENABLE_QTNETWORK", True)
+-    set_define("MOZ_ENABLE_QTNETWORK", True)
+     set_define("QT_NO_KEYWORDS", True)
+ 
++    # Only the Qt modules Gecko's code uses: Core (QString, QUrl, QTimer,
++    # QThread, QObject, the event dispatcher) and Gui (QGuiApplication,
++    # QDesktopServices). Network, Positioning, PrintSupport, Quick and
++    # Widgets were linked into libxul without a user, and each is one more
++    # library to load. The embedder (qtmozembed) links what it needs itself.
+     qt_base = pkg_check_modules(
+         "MOZ_QT_BASE",
+         [
+             "Qt5Core",
+             "Qt5Gui",
+-            "Qt5Network",
+-            "Qt5Positioning",
+-            "Qt5PrintSupport",
+-            "Qt5Quick",
+-            "Qt5Widgets",
+             "gio-unix-2.0",
+             "glib-2.0",
+             "gobject-2.0",
+-- 
+2.56.0
+

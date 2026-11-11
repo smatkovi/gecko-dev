@@ -1,0 +1,26 @@
+From f69f1938ece4592e52d38d560e3233230e149bab Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 21:06:00 +0000
+Subject: [PATCH 110/156] transplant-fix: software.opengl ist mirror:once -
+ AtStartup-Getter war korrekt (Revert des Getter-Tauschs)
+
+---
+ gfx/thebes/gfxPlatform.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+index 59c1a58aaf35..f746c66b3f81 100644
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -2730,7 +2730,7 @@ void gfxPlatform::InitWebRenderConfig() {
+ 
+ #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK) || \
+     defined(MOZ_EMBEDLITE)
+-  if (StaticPrefs::gfx_webrender_software_opengl()) {
++  if (StaticPrefs::gfx_webrender_software_opengl_AtStartup()) {
+     gfxVars::SetAllowSoftwareWebRenderOGL(true);
+   }
+ #endif
+-- 
+2.56.0
+

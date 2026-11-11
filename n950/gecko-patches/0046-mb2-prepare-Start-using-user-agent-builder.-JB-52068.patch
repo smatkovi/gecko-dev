@@ -1,0 +1,42 @@
+From f490d5f71c9b11ca3d7cd939d7c815fa97789db1 Mon Sep 17 00:00:00 2001
+From: Raine Makelainen <raine.makelainen@jolla.com>
+Date: Fri, 4 Dec 2020 16:56:05 +0200
+Subject: [PATCH 046/156] *mb2-prepare* Start using user-agent builder.
+ JB#52068
+
+Use the current Gecko UA construction path for EmbedLite while retaining its
+mobile compatibility token and release-specific Gecko product version.
+
+Signed-off-by: Raine Makelainen <raine.makelainen@jolla.com>
+Mb2-scrape: filename=0059-Start-using-user-agent-builder.-JB-52068.patch
+---
+ netwerk/protocol/http/nsHttpHandler.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+index eccfe0a78087..1036b8cb2c25 100644
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -473,7 +473,7 @@ nsresult nsHttpHandler::Init() {
+ 
+   mRequestContextService = RequestContextService::GetOrCreate();
+ 
+-#if defined(ANDROID) || defined(XP_IOS)
++#if defined(ANDROID) || defined(XP_IOS) || defined(MOZ_EMBEDLITE)
+   mProductSub.AssignLiteral(MOZILLA_UAVERSION);
+ #else
+   mProductSub.AssignLiteral(LEGACY_UA_GECKO_TRAIL);
+@@ -1186,7 +1186,9 @@ void nsHttpHandler::InitUserAgentComponents() {
+   if (Preferences::GetBool(UA_PREF("use_device"), false)) {
+     mDeviceModelId = mozilla::net::GetDeviceModelId();
+   }
+-#endif  // ANDROID
++#elif defined(MOZ_EMBEDLITE)
++  mCompatDevice.AssignLiteral("Mobile");
++#endif  // ANDROID || MOZ_EMBEDLITE
+ 
+ #if defined(XP_IOS)
+   // Freeze the iOS version to 18.0, use an underscore separator to avoid
+-- 
+2.56.0
+

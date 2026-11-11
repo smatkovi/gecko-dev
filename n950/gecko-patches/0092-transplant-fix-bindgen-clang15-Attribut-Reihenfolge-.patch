@@ -1,0 +1,53 @@
+From 486c6af664a838687fcc572da9d8f7ba17e91a24 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 15:45:40 +0000
+Subject: [PATCH 092/156] transplant-fix: bindgen/clang15 -
+ Attribut-Reihenfolge Sprintf.h, static_assert-Guard nsThreadUtils.h
+
+---
+ mozglue/misc/Sprintf.h        | 4 ++--
+ xpcom/threads/nsThreadUtils.h | 2 ++
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/mozglue/misc/Sprintf.h b/mozglue/misc/Sprintf.h
+index 160429d1f689..4f8165d38f1f 100644
+--- a/mozglue/misc/Sprintf.h
++++ b/mozglue/misc/Sprintf.h
+@@ -48,8 +48,8 @@ struct MOZ_STACK_CLASS SprintfAppend final : public mozilla::PrintfTarget {
+ }  // namespace mozilla
+ #  endif  // SPRINTF_H_USES_VSNPRINTF
+ 
+-MOZ_FORMAT_PRINTF(3, 0)
+ [[maybe_unused]]
++MOZ_FORMAT_PRINTF(3, 0)
+ static int VsprintfBuf(char* buffer, size_t bufsize, const char* format,
+                        va_list args) {
+   MOZ_ASSERT(format != buffer);
+@@ -66,8 +66,8 @@ static int VsprintfBuf(char* buffer, size_t bufsize, const char* format,
+ #  endif
+ }
+ 
+-MOZ_FORMAT_PRINTF(3, 4)
+ [[maybe_unused]]
++MOZ_FORMAT_PRINTF(3, 4)
+ static int SprintfBuf(char* buffer, size_t bufsize, const char* format, ...) {
+   va_list args;
+   va_start(args, format);
+diff --git a/xpcom/threads/nsThreadUtils.h b/xpcom/threads/nsThreadUtils.h
+index b86b17e3ae32..7bb673d9325c 100644
+--- a/xpcom/threads/nsThreadUtils.h
++++ b/xpcom/threads/nsThreadUtils.h
+@@ -999,8 +999,10 @@ struct OtherParameterStorage<const T&&> {
+   // This is good advice regardless of the types you're handling. Making it a
+   // dependent type so that the check only happens when this specialization is
+   // instantiated.
++#ifndef RUST_BINDGEN
+   static_assert(!std::is_same_v<std::void_t<T>, void>,
+                 "please use a lambda function");
++#endif
+ };
+ 
+ // default impl.
+-- 
+2.56.0
+

@@ -1,0 +1,32 @@
+From 56fbdb12b8f83439f720608db6ae0f07d56fdcb2 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 14:58:32 +0000
+Subject: [PATCH 089/156] transplant-fix: StaticPrefList Kamera-Prefs
+ Einrueckung (- name mit einem Leerzeichen)
+
+---
+ modules/libpref/init/StaticPrefList.yaml | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index a9fc399e3c47..278d838528f0 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -12585,12 +12585,12 @@
+ 
+ #ifdef MOZ_EMBEDLITE
+   # Enable the gecko-camera based decoder by default.
+--   name: media.gecko-camera-codec.enabled
++- name: media.gecko-camera-codec.enabled
+     type: RelaxedAtomicBool
+     value: true
+     mirror: always
+ 
+--   name: media.gecko-camera-codec.preferred
++- name: media.gecko-camera-codec.preferred
+     type: RelaxedAtomicBool
+     value: true
+     mirror: always
+-- 
+2.56.0
+

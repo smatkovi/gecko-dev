@@ -1,0 +1,58 @@
+From f464f1e29037401e90a58bf8d7f5385615c9b458 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 18:49:11 +0000
+Subject: [PATCH 104/156] transplant-fix: WebGPU DMA-BUF-Guards vollstaendig
+ auf GTK-only (SharedTexture-Familie + WebGPUParent-Aussenbedingungen)
+
+---
+ dom/webgpu/SharedTexture.cpp    | 4 ++--
+ dom/webgpu/ipc/WebGPUParent.cpp | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/dom/webgpu/SharedTexture.cpp b/dom/webgpu/SharedTexture.cpp
+index 713308a31da5..b64f9e7e14ab 100644
+--- a/dom/webgpu/SharedTexture.cpp
++++ b/dom/webgpu/SharedTexture.cpp
+@@ -10,7 +10,7 @@
+ #  include "mozilla/webgpu/SharedTextureD3D11.h"
+ #endif
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#if defined(MOZ_WIDGET_GTK)
+ #  include "mozilla/webgpu/SharedTextureDMABuf.h"
+ #endif
+ 
+@@ -32,7 +32,7 @@ UniquePtr<SharedTexture> SharedTexture::Create(
+ #ifdef XP_WIN
+   texture = SharedTextureD3D11::Create(aParent, aDeviceId, aWidth, aHeight,
+                                        aFormat, aUsage);
+-#elif defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#elif defined(MOZ_WIDGET_GTK)
+   texture = SharedTextureDMABuf::Create(aParent, aDeviceId, aWidth, aHeight,
+                                         aFormat, aUsage);
+ #elif defined(XP_MACOSX)
+diff --git a/dom/webgpu/ipc/WebGPUParent.cpp b/dom/webgpu/ipc/WebGPUParent.cpp
+index 7d7ed9069019..c9d7ca957749 100644
+--- a/dom/webgpu/ipc/WebGPUParent.cpp
++++ b/dom/webgpu/ipc/WebGPUParent.cpp
+@@ -105,7 +105,7 @@ extern void* wgpu_server_get_shared_texture_handle(WGPUWebGPUParentPtr aParent,
+ }
+ #endif
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#ifdef MOZ_WIDGET_GTK
+ extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
+                                           WGPUTextureId aId) {
+   auto* parent = static_cast<WebGPUParent*>(aParent);
+@@ -131,7 +131,7 @@ extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
+ }
+ #endif
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#ifdef MOZ_WIDGET_GTK
+ extern const WGPUVkImageHandle* wgpu_server_get_vk_image_handle(
+     WGPUWebGPUParentPtr aParent, WGPUTextureId aId) {
+   auto* parent = static_cast<WebGPUParent*>(aParent);
+-- 
+2.56.0
+

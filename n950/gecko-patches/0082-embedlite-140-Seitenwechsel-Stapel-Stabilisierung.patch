@@ -1,0 +1,44 @@
+From 425c2e28bf979d76957a214f25ea110ac89914bb Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Wed, 19 Aug 2026 19:35:55 +0200
+Subject: [PATCH 082/156] embedlite-140: Seitenwechsel-Stapel + Stabilisierung
+
+Amtswechsel-Mechanik komplett: Ctor registriert nur bei freiem Amt,
+Dtor raeumt Registrierung, Present uebernimmt nur bei Vakanz (nach
+Dtor des Vorgaengers) - Boot bleibt deterministisch beim Erstling
+(Dreifachprobe verifiziert), Seitenwechsel wandert zum Nachfolger.
+
+Nachfolger-Ertuechtigung: P4-Screen-Nachbau im Present (0072-Pfad
+laeuft nur beim Erstling), EGLImage-Factory-Morph (Create startet
+Basic - WithPlatformImage braucht EGLImageShare), fFinish-Syncprobe,
+ScheduleForcedGenerateFrame(CONFIG_CHANGE) nach Screen-Bau.
+Stand: Seitenwechsel liefert Szene-Fragmente (Tiles) statt Flaeche -
+Sync/Morph-Semantik ist die offene Montagsfrage.
+
+Upstream-Fixes: ResumeComposition ohne Widget/WrBridge-Nullcheck
+(crash beim Seitenwechsel), ResumeRendering-Lambda mit RefPtr-self.
+Diagnose: Selbsttest-Sturm ausgebaut (187k Feuerungen), this=/fb=
+in den LOGTs, P0-P4-Marker, LiveCompositors-Liste.
+---
+ gfx/layers/ipc/CompositorBridgeParent.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/gfx/layers/ipc/CompositorBridgeParent.cpp b/gfx/layers/ipc/CompositorBridgeParent.cpp
+index 69c87c329f9f..cd27a3282aa2 100644
+--- a/gfx/layers/ipc/CompositorBridgeParent.cpp
++++ b/gfx/layers/ipc/CompositorBridgeParent.cpp
+@@ -540,6 +540,11 @@ bool CompositorBridgeParent::ResumeComposition() {
+   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread(),
+              "ResumeComposition() can only be called on the compositor thread");
+ 
++  // EmbedLite: beim Seitenwechsel koennen Widget/WrBridge bereits
++  // abgeraeumt sein, waehrend ein Resume noch unterwegs ist.
++  if (!mWidget || !mWrBridge) {
++    return false;
++  }
+   bool resumed = mWidget->OnResumeComposition();
+   resumed = resumed && mWrBridge->Resume();
+ 
+-- 
+2.56.0
+

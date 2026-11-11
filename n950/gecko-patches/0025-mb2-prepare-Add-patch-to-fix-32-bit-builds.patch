@@ -1,0 +1,39 @@
+From 5bdb74e89d291b4d02920222fb7d385c1e08aa5f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matti=20Lehtim=C3=A4ki?= <matti.lehtimaki@jolla.com>
+Date: Sat, 11 Nov 2023 19:47:08 +0200
+Subject: [PATCH 025/156] *mb2-prepare* Add patch to fix 32-bit builds
+
+Patch taken from comment of Mozilla bug 1729459.
+
+Mb2-scrape: filename=0032-Add-patch-to-fix-32-bit-builds.patch
+---
+ modules/fdlibm/src/math_private.h | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/modules/fdlibm/src/math_private.h b/modules/fdlibm/src/math_private.h
+index 64a83dbe8657..d1e731b18d90 100644
+--- a/modules/fdlibm/src/math_private.h
++++ b/modules/fdlibm/src/math_private.h
+@@ -25,6 +25,19 @@
+ 
+ #include "fdlibm.h"
+ 
++/*
++ * Emulate FreeBSD internal double types.
++ * Adapted from https://github.com/freebsd/freebsd-src/search?q=__double_t
++ */
++
++#if defined __FLT_EVAL_METHOD__ && (__FLT_EVAL_METHOD__ == 2)
++typedef long double __double_t;
++#else
++typedef double      __double_t;
++#endif
++typedef __double_t  double_t;
++typedef float       __float_t;
++
+ /*
+  * The original fdlibm code used statements like:
+  *	n0 = ((*(int*)&one)>>29)^1;		* index of high word *
+-- 
+2.56.0
+

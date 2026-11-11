@@ -1,0 +1,101 @@
+From 4666126a02b75ed4fa6050800c65d1a53714d492 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 16:26:44 +0000
+Subject: [PATCH 094/156] transplant-fix: SafeArea-Serie rekonstruiert
+ (SubstitutionResult-Feld, Device-Deklaration+Methoden, Destructuring)
+
+---
+ servo/components/style/custom_properties.rs |  3 +++
+ servo/components/style/device/gecko.rs      | 12 +++++++++++-
+ servo/components/style/device/mod.rs        |  4 +++-
+ servo/components/style/properties/mod.rs    |  2 +-
+ 4 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/servo/components/style/custom_properties.rs b/servo/components/style/custom_properties.rs
+index f309ef6215a5..61141dddd9cf 100644
+--- a/servo/components/style/custom_properties.rs
++++ b/servo/components/style/custom_properties.rs
+@@ -2638,6 +2638,8 @@ pub struct SubstitutionResult<'a> {
+     pub css: Cow<'a, str>,
+     /// Regions in the `css` string that are attr()-tainted, if any.
+     pub attr_taint: AttrTaint,
++    /// Safe-area inset variables consumed during substitution.
++    pub safe_area_inset_usage: u8,
+ }
+ 
+ fn compute_value(
+@@ -2969,5 +2971,6 @@ pub fn substitute<'a>(
+     Ok(SubstitutionResult {
+         css: v.css,
+         attr_taint,
++        safe_area_inset_usage: v.safe_area_inset_usage,
+     })
+ }
+diff --git a/servo/components/style/device/gecko.rs b/servo/components/style/device/gecko.rs
+index cdd9bb15c7ff..832a981ceee2 100644
+--- a/servo/components/style/device/gecko.rs
++++ b/servo/components/style/device/gecko.rs
+@@ -30,7 +30,7 @@ use euclid::default::Size2D;
+ use euclid::{Scale, SideOffsets2D};
+ use parking_lot::RwLock;
+ use servo_arc::Arc;
+-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
++use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+ use std::{cmp, fmt};
+ use style_traits::{CSSPixel, DevicePixel};
+ 
+@@ -447,6 +447,16 @@ impl Device {
+     }
+ 
+     /// Returns safe area insets
++    /// Record consumed safe-area inset env vars.
++    pub fn note_safe_area_inset_usage(&self, usage: u8) {
++        self.safe_area_inset_usage.fetch_or(usage, Ordering::Relaxed);
++    }
++
++    /// Safe-area inset usage bits since last cache rebuild.
++    pub fn safe_area_inset_usage(&self) -> u8 {
++        self.safe_area_inset_usage.load(Ordering::Relaxed)
++    }
++
+     pub fn safe_area_insets(&self) -> SideOffsets2D<f32, CSSPixel> {
+         let pc = match self.pres_context() {
+             Some(pc) => pc,
+diff --git a/servo/components/style/device/mod.rs b/servo/components/style/device/mod.rs
+index bfb00b1750e4..f4959b2653e9 100644
+--- a/servo/components/style/device/mod.rs
++++ b/servo/components/style/device/mod.rs
+@@ -14,7 +14,7 @@ use crate::values::computed::Length;
+ use parking_lot::RwLock;
+ use servo_arc::Arc;
+ use std::mem;
+-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
++use std::sync::atomic::{AtomicU8, AtomicBool, AtomicU32, Ordering};
+ 
+ #[cfg(feature = "gecko")]
+ use crate::device::gecko::ExtraDeviceData;
+@@ -62,6 +62,8 @@ pub struct Device {
+     /// Whether any styles computed in the document relied on the root font-size
+     /// by using rem units.
+     used_root_font_size: AtomicBool,
++    /// Safe-area inset env vars consumed while resolving style.
++    safe_area_inset_usage: AtomicU8,
+     /// Whether any styles computed in the document relied on the root line-height
+     /// by using rlh units.
+     used_root_line_height: AtomicBool,
+diff --git a/servo/components/style/properties/mod.rs b/servo/components/style/properties/mod.rs
+index b405aa24acd6..dc57790be312 100644
+--- a/servo/components/style/properties/mod.rs
++++ b/servo/components/style/properties/mod.rs
+@@ -1505,7 +1505,7 @@ impl UnparsedValue {
+             }
+         }
+ 
+-        let SubstitutionResult { css, attr_taint } = match custom_properties::substitute(
++        let SubstitutionResult { css, attr_taint, safe_area_inset_usage } = match custom_properties::substitute(
+             &self.variable_value,
+             substitution_functions,
+             stylist,
+-- 
+2.56.0
+

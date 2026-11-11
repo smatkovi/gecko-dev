@@ -1,0 +1,33 @@
+From 1ec28d14d7ecd0bb27b7f311e386c18f6a178d31 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 20:12:39 +0000
+Subject: [PATCH 130/156] SearchUtils.makeChannel: load file/chrome/resource
+ OpenSearch sources with the system principal (a null principal cannot load
+ local URIs; embedders install bundled engines from disk)
+
+---
+ toolkit/components/search/SearchUtils.sys.mjs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/toolkit/components/search/SearchUtils.sys.mjs b/toolkit/components/search/SearchUtils.sys.mjs
+index 6ac41667ed44..027d53571003 100644
+--- a/toolkit/components/search/SearchUtils.sys.mjs
++++ b/toolkit/components/search/SearchUtils.sys.mjs
+@@ -303,6 +303,14 @@ export var SearchUtils = {
+           uri,
+           {}
+         );
++      } else if (
++        uri.schemeIs("file") ||
++        uri.schemeIs("chrome") ||
++        uri.schemeIs("resource")
++      ) {
++        // Bundled engines (embedders install OpenSearch files from disk):
++        // a null principal is not allowed to load local URIs.
++        principal = Services.scriptSecurityManager.getSystemPrincipal();
+       } else {
+         if (!originAttributes) {
+           originAttributes = {};
+-- 
+2.56.0
+

@@ -1,0 +1,104 @@
+From 0f9f69fe754b2e8becd431d9fbe385483168e7e1 Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Thu, 20 Aug 2026 09:19:17 +0200
+Subject: [PATCH 084/156] embedlite-140: Partial Present im Embedding hart
+ deaktivieren
+
+SharedSurface-Rotation hat keine Swapchain-Age-Semantik, und der
+Nachfolger-Renderer haelt nicht immer das EmbedLite-Widget - die
+IsEmbedLiteOffscreen-Guards reichen daher nicht. UsePartialPresent
+-> false, GetBufferAge -> 0 unter MOZ_EMBEDLITE unbedingt.
+---
+ .../RenderCompositorEGL.cpp                   | 21 ++++++++++---------
+ .../RenderCompositorOGL.cpp                   | 21 ++++++++++---------
+ 2 files changed, 22 insertions(+), 20 deletions(-)
+
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index e4dd3812d514..f60f414d4254 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -401,11 +401,14 @@ LayoutDeviceIntSize RenderCompositorEGL::GetBufferSize() {
+ 
+ bool RenderCompositorEGL::UsePartialPresent() {
+ #ifdef MOZ_EMBEDLITE
+-  if (mUseEmbedLiteOffscreen) {
+-    return false;
+-  }
+-#endif
++  // Embedding rendert in die SharedSurface-Rotation ohne echte
++  // Swapchain-Age-Semantik - Partial Present frisst dort Pixel
++  // (wachsende schwarze Loecher). Hart aus, unabhaengig vom Widget:
++  // der Nachfolger-Renderer haelt nicht immer das EmbedLite-Widget.
++  return false;
++#else
+   return gfx::gfxVars::WebRenderMaxPartialPresentRects() > 0;
++#endif
+ }
+ 
+ bool RenderCompositorEGL::RequestFullRender() { return false; }
+@@ -420,15 +423,13 @@ bool RenderCompositorEGL::ShouldDrawPreviousPartialPresentRegions() {
+ 
+ size_t RenderCompositorEGL::GetBufferAge() const {
+ #ifdef MOZ_EMBEDLITE
+-  if (mUseEmbedLiteOffscreen) {
+-    return 0;
+-  }
+-#endif
+-  if (!StaticPrefs::
+-          gfx_webrender_allow_partial_present_buffer_age_AtStartup()) {
++  return 0;  // Alter unbekannt -> WebRender rendert voll.
++#else
++  if (!StaticPrefs::gfx_webrender_allow_partial_present_buffer_age_AtStartup()) {
+     return 0;
+   }
+   return gl()->GetBufferAge();
++#endif
+ }
+ 
+ void RenderCompositorEGL::SetBufferDamageRegion(const wr::DeviceIntRect* aRects,
+diff --git a/gfx/webrender_bindings/RenderCompositorOGL.cpp b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+index 677bf04ec062..8a7f084689f7 100644
+--- a/gfx/webrender_bindings/RenderCompositorOGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+@@ -162,11 +162,14 @@ bool RenderCompositorOGL::RequestFullRender() { return false; }
+ 
+ bool RenderCompositorOGL::UsePartialPresent() {
+ #ifdef MOZ_EMBEDLITE
+-  if (mWidget && mWidget->IsEmbedLiteOffscreen()) {
+-    return false;
+-  }
+-#endif
++  // Embedding rendert in die SharedSurface-Rotation ohne echte
++  // Swapchain-Age-Semantik - Partial Present frisst dort Pixel
++  // (wachsende schwarze Loecher). Hart aus, unabhaengig vom Widget:
++  // der Nachfolger-Renderer haelt nicht immer das EmbedLite-Widget.
++  return false;
++#else
+   return gfx::gfxVars::WebRenderMaxPartialPresentRects() > 0;
++#endif
+ }
+ 
+ bool RenderCompositorOGL::ShouldDrawPreviousPartialPresentRegions() {
+@@ -175,15 +178,13 @@ bool RenderCompositorOGL::ShouldDrawPreviousPartialPresentRegions() {
+ 
+ size_t RenderCompositorOGL::GetBufferAge() const {
+ #ifdef MOZ_EMBEDLITE
+-  if (mWidget && mWidget->IsEmbedLiteOffscreen()) {
+-    return 0;
+-  }
+-#endif
+-  if (!StaticPrefs::
+-          gfx_webrender_allow_partial_present_buffer_age_AtStartup()) {
++  return 0;  // Alter unbekannt -> WebRender rendert voll.
++#else
++  if (!StaticPrefs::gfx_webrender_allow_partial_present_buffer_age_AtStartup()) {
+     return 0;
+   }
+   return gl()->GetBufferAge();
++#endif
+ }
+ 
+ }  // namespace mozilla::wr
+-- 
+2.56.0
+

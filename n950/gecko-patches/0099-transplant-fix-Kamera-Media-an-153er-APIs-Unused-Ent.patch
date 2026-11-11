@@ -1,0 +1,73 @@
+From c423818c082b04d2f99b665b75dfeafdccbb190e Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 17:27:49 +0000
+Subject: [PATCH 099/156] transplant-fix: Kamera/Media an 153er-APIs
+ (Unused-Entsorgung, rtc->webrtc scoped_refptr, CamerasParent-Doppelgaenger +
+ fmt-LOG)
+
+---
+ .../modules/video_capture/sfos/video_capture_sfos.cc        | 6 +++---
+ .../libwebrtc/modules/video_capture/video_capture_impl.cc   | 2 +-
+ .../libwebrtc/modules/video_capture/video_capture_impl.h    | 2 +-
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+index 5afea9b5962a..480cb81c7d3f 100644
+--- a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
++++ b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+@@ -18,7 +18,7 @@
+ namespace webrtc {
+ namespace videocapturemodule {
+ 
+-rtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
++webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+     const char* device_unique_id_utf8) {
+   auto implementation = rtc::make_ref_counted<VideoCaptureModuleSFOS>();
+   if (implementation->Init(device_unique_id_utf8) != 0) {
+@@ -27,7 +27,7 @@ rtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+   return implementation;
+ }
+ 
+-rtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
++webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+     VideoCaptureOptions* /* options */,
+     const char* device_unique_id_utf8) {
+   return Create(device_unique_id_utf8);
+@@ -162,7 +162,7 @@ void VideoCaptureModuleSFOS::onCameraFrame(
+   }
+ 
+   const uint64_t timestamp_us = frame->timestampUs;
+-  rtc::scoped_refptr<I420BufferInterface> buffer;
++  webrtc::scoped_refptr<I420BufferInterface> buffer;
+   if (frame->chromaStep == 1) {
+     buffer = WrapI420Buffer(
+         frame->width, frame->height, frame->y, frame->yStride, frame->cb,
+diff --git a/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc b/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
+index 8ac9bc394f5e..212092b9b0b4 100644
+--- a/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
++++ b/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
+@@ -264,7 +264,7 @@ int32_t VideoCaptureImpl::IncomingFrame(uint8_t* videoFrame,
+ }
+ 
+ int32_t VideoCaptureImpl::IncomingVideoBuffer(
+-    const rtc::scoped_refptr<VideoFrameBuffer>& buffer,
++    const webrtc::scoped_refptr<VideoFrameBuffer>& buffer,
+     int64_t capture_time) {
+   RTC_CHECK_RUNS_SERIALIZED(&capture_checker_);
+   MutexLock lock(&api_lock_);
+diff --git a/third_party/libwebrtc/modules/video_capture/video_capture_impl.h b/third_party/libwebrtc/modules/video_capture/video_capture_impl.h
+index 762336ec5009..cd964927b783 100644
+--- a/third_party/libwebrtc/modules/video_capture/video_capture_impl.h
++++ b/third_party/libwebrtc/modules/video_capture/video_capture_impl.h
+@@ -90,7 +90,7 @@ class RTC_EXPORT VideoCaptureImpl : public VideoCaptureModule {
+   ~VideoCaptureImpl() override;
+ 
+   int32_t IncomingVideoBuffer(
+-      const rtc::scoped_refptr<VideoFrameBuffer>& buffer,
++      const webrtc::scoped_refptr<VideoFrameBuffer>& buffer,
+       int64_t capture_time);
+ 
+   // Calls to the public API must happen on a single thread.
+-- 
+2.56.0
+

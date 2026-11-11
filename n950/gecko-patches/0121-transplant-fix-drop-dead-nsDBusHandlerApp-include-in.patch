@@ -1,0 +1,27 @@
+From ba86100a2f18de0098bacf7e9f3d6f1cea80ad59 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 07:28:11 +0000
+Subject: [PATCH 121/156] transplant-fix: drop dead nsDBusHandlerApp include in
+ nsMIMEInfoUnix.cpp (upstream Bug 2046568)
+
+---
+ uriloader/exthandler/unix/nsMIMEInfoUnix.cpp | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/uriloader/exthandler/unix/nsMIMEInfoUnix.cpp b/uriloader/exthandler/unix/nsMIMEInfoUnix.cpp
+index bcd530078733..5efc3b8d6c26 100644
+--- a/uriloader/exthandler/unix/nsMIMEInfoUnix.cpp
++++ b/uriloader/exthandler/unix/nsMIMEInfoUnix.cpp
+@@ -21,9 +21,6 @@
+ #  include "nsXPCOMCID.h"
+ #endif
+ 
+-#ifdef MOZ_ENABLE_DBUS
+-#  include "nsDBusHandlerApp.h"
+-#endif
+ #ifdef MOZ_WIDGET_QT
+ #  include "nsMIMEInfoQt.h"
+ #endif
+-- 
+2.56.0
+

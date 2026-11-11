@@ -1,0 +1,38 @@
+From d04d3772564702c0b2f8c435072ac084c8d35ee3 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 15:22:58 +0000
+Subject: [PATCH 091/156] transplant-fix: Kamera-Prefs Folgezeilen auf
+ Standardeinrueckung (Halbfix vervollstaendigt)
+
+---
+ modules/libpref/init/StaticPrefList.yaml | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 9e66a4e022a5..d9399dca0525 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -12585,14 +12585,14 @@
+ #ifdef MOZ_EMBEDLITE
+   # Enable the gecko-camera based decoder by default.
+ - name: media.gecko-camera-codec.enabled
+-    type: RelaxedAtomicBool
+-    value: true
+-    mirror: always
++  type: RelaxedAtomicBool
++  value: true
++  mirror: always
+ 
+ - name: media.gecko-camera-codec.preferred
+-    type: RelaxedAtomicBool
+-    value: true
+-    mirror: always
++  type: RelaxedAtomicBool
++  value: true
++  mirror: always
+ #endif  # MOZ_EMBEDLITE
+ 
+ # Now we will completely disable the ability to perform audio decoding outside
+-- 
+2.56.0
+

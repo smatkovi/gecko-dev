@@ -1,0 +1,142 @@
+From 3eb249c678e9b71713017ed571097543cfadd503 Mon Sep 17 00:00:00 2001
+From: Andrew Branson <andrew.branson@jolla.com>
+Date: Thu, 6 Aug 2026 15:59:43 +0200
+Subject: [PATCH 069/156] *mb2-prepare* Keep DMA-BUF textures GTK-only
+
+The DMA-BUF external texture implementation depends on widget/gtk exports.
+Do not build or reference it with the Qt widget backend, and select the
+existing readback presentation path instead.
+
+Mb2-scrape: filename=0093-sailfishos-webgpu-Keep-DMA-BUF-textures-GTK-only.patch
+---
+ dom/webgpu/CanvasContext.cpp    |  5 ++++-
+ dom/webgpu/ExternalTexture.cpp  |  5 +++++
+ dom/webgpu/ipc/WebGPUParent.cpp | 12 ++++++++++--
+ dom/webgpu/ipc/WebGPUParent.h   |  2 +-
+ dom/webgpu/moz.build            |  2 +-
+ 5 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/dom/webgpu/CanvasContext.cpp b/dom/webgpu/CanvasContext.cpp
+index e3f2a2636b28..250978c94b4b 100644
+--- a/dom/webgpu/CanvasContext.cpp
++++ b/dom/webgpu/CanvasContext.cpp
+@@ -142,7 +142,7 @@ void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aConfig,
+                        "WebRender is not using hardware acceleration";
+     mUseSharedTextureInSwapChain = false;
+   }
+-#elif defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#elif defined(MOZ_WIDGET_GTK)
+   // When DMABufDevice is not enabled, disable shared texture in swap chain.
+   const auto& modifiers = gfx::gfxVars::DMABufModifiersARGB();
+   if (modifiers.IsEmpty()) {
+@@ -150,6 +150,9 @@ void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aConfig,
+                        "missing GBM_FORMAT_ARGB8888 dmabuf format";
+     mUseSharedTextureInSwapChain = false;
+   }
++#elif defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++  // Other Linux widget toolkits do not build the GTK DMA-BUF backend.
++  mUseExternalTextureInSwapChain = false;
+ #endif
+ 
+   mCurrentTexture = aConfig.mDevice->InitSwapChain(
+diff --git a/dom/webgpu/ExternalTexture.cpp b/dom/webgpu/ExternalTexture.cpp
+index 3ac252064012..fc89745e47cf 100644
+--- a/dom/webgpu/ExternalTexture.cpp
++++ b/dom/webgpu/ExternalTexture.cpp
+@@ -29,6 +29,11 @@
+ #  include "mozilla/layers/GpuProcessD3D11TextureMap.h"
+ #  include "mozilla/layers/TextureD3D11.h"
+ #endif
++
++#ifdef MOZ_WIDGET_GTK
++#  include "mozilla/webgpu/SharedTextureDMABuf.h"
++#endif
++
+ #ifdef XP_MACOSX
+ #  include "mozilla/gfx/MacIOSurface.h"
+ #  include "mozilla/layers/MacIOSurfaceTextureHostOGL.h"
+diff --git a/dom/webgpu/ipc/WebGPUParent.cpp b/dom/webgpu/ipc/WebGPUParent.cpp
+index 601af777870c..7d7ed9069019 100644
+--- a/dom/webgpu/ipc/WebGPUParent.cpp
++++ b/dom/webgpu/ipc/WebGPUParent.cpp
+@@ -26,7 +26,7 @@
+ #  include "mozilla/webgpu/SharedTextureD3D11.h"
+ #endif
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#ifdef MOZ_WIDGET_GTK
+ #  include "mozilla/webgpu/SharedTextureDMABuf.h"
+ #endif
+ 
+@@ -116,6 +116,7 @@ extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
+     return -1;
+   }
+ 
++#ifdef MOZ_WIDGET_GTK
+   auto* textureDMABuf = texture->AsSharedTextureDMABuf();
+   if (!textureDMABuf) {
+     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+@@ -124,6 +125,9 @@ extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
+   auto fd = textureDMABuf->CloneDmaBufFd();
+   // fd should be closed by the caller.
+   return fd.release();
++#else
++  return -1;
++#endif
+ }
+ #endif
+ 
+@@ -138,11 +142,15 @@ extern const WGPUVkImageHandle* wgpu_server_get_vk_image_handle(
+     return nullptr;
+   }
+ 
++#  ifdef MOZ_WIDGET_GTK
+   auto* textureDMABuf = texture->AsSharedTextureDMABuf();
+   if (!textureDMABuf) {
+     return nullptr;
+   }
+   return textureDMABuf->GetHandle();
++#  else
++  return nullptr;
++#  endif
+ }
+ #endif
+ 
+@@ -1954,7 +1962,7 @@ Maybe<ffi::WGPUFfiLUID> WebGPUParent::GetCompositorDeviceLuid() {
+ }
+ #endif
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#ifdef MOZ_WIDGET_GTK
+ VkImageHandle::~VkImageHandle() {
+   if (!mParent) {
+     return;
+diff --git a/dom/webgpu/ipc/WebGPUParent.h b/dom/webgpu/ipc/WebGPUParent.h
+index f584b3fdbbc9..b7bfde1e56b7 100644
+--- a/dom/webgpu/ipc/WebGPUParent.h
++++ b/dom/webgpu/ipc/WebGPUParent.h
+@@ -267,7 +267,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
+   std::unordered_map<RawId, RefPtr<gfx::FileHandleWrapper>> mDeviceFenceHandles;
+ };
+ 
+-#if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
++#ifdef MOZ_WIDGET_GTK
+ class VkImageHandle {
+  public:
+   explicit VkImageHandle(WebGPUParent* aParent,
+diff --git a/dom/webgpu/moz.build b/dom/webgpu/moz.build
+index 9c05835bc8d9..0ce569e07333 100644
+--- a/dom/webgpu/moz.build
++++ b/dom/webgpu/moz.build
+@@ -84,7 +84,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+         "SharedTextureD3D11.cpp",
+     ]
+ 
+-if CONFIG["OS_TARGET"] == "Linux":
++if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+     EXPORTS.mozilla.webgpu += [
+         "SharedTextureDMABuf.h",
+     ]
+-- 
+2.56.0
+

@@ -1,0 +1,34 @@
+From 5d9790ff2ca6e4e916bdc8284ea2d29294a9ef69 Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Wed, 19 Aug 2026 14:01:23 +0200
+Subject: [PATCH 081/156] embedlite-140: Compositor-Registrierung reparieren
+
+Ein zweiter, kontextloser EmbedLiteCompositorBridgeParent registrierte sich
+beim WindowParent und verdraengte den publizierenden - WithPlatformImage
+lieferte dadurch dauerhaft fb=0, die App band nie eine Textur.
+
+- Ctor: nur registrieren, wenn noch kein Compositor eingetragen ist
+- Dtor: eigene Registrierung zuruecknehmen
+- PresentOffscreenSurface: Registrierung dem publizierenden Compositor zuschanzen
+- Diagnose: this-Zeiger und fb-Status in den LOGTs, Present-Exits P1/P2/P3
+---
+ build/config.status | 1 +
+ documentation.list  | 0
+ 2 files changed, 1 insertion(+)
+ create mode 120000 build/config.status
+ create mode 100644 documentation.list
+
+diff --git a/build/config.status b/build/config.status
+new file mode 120000
+index 000000000000..6963e943eaad
+--- /dev/null
++++ b/build/config.status
+@@ -0,0 +1 @@
++/home/mersdk/share/esr115/gecko-dev/gecko-dev/../obj-build-mer-qt-xr/config.status
+\ No newline at end of file
+diff --git a/documentation.list b/documentation.list
+new file mode 100644
+index 000000000000..e69de29bb2d1
+-- 
+2.56.0
+

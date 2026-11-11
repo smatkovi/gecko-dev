@@ -1,0 +1,2073 @@
+From 796397b1e762d3a5da7804adb4bdd1bd3e432fc4 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:33:13 +0100
+Subject: [PATCH 155/156] webrender: shaders without bitwise ops, switch and
+ array returns
+
+For GLSL ES 1.00, written so that every version compiles the same code:
+- bit fields through WR_BITS, WR_HAS_FLAG, WR_SHL, WR_SHR and WR_MOD
+  (base.glsl), the operators themselves on GL and ES 3, float arithmetic
+  on ESSL 1 (exact below 2^24); highp int in ESSL 1 fragment shaders
+- every switch as an if/else chain (tools: switch2if.py)
+- the multi-texel GPU buffer fetches through WR_GPU_BUFFER_FETCH_<n>,
+  out-array functions on ESSL 1
+- uint constants and the texel fetch address math without uint on ESSL 1
+- texelFetch macros and wr_mix/wr_transpose/wr_inverse/wr_round for the
+  ESSL 1 rewrite in webrender_build
+
+The 1471 wrench reftests under GL 3 (Mesa llvmpipe) give exactly the
+same results as with the original shaders (the same 93 tests differ by
+the same pixels).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/base.glsl               |  88 ++++++++++
+ gfx/wr/webrender/res/blend.glsl              |  59 +++----
+ gfx/wr/webrender/res/brush.glsl              |   8 +-
+ gfx/wr/webrender/res/brush_blend.glsl        |  12 +-
+ gfx/wr/webrender/res/brush_image.glsl        |  67 ++++----
+ gfx/wr/webrender/res/brush_mix_blend.glsl    |  52 +++---
+ gfx/wr/webrender/res/brush_opacity.glsl      |   2 +-
+ gfx/wr/webrender/res/cs_blur.glsl            |  12 +-
+ gfx/wr/webrender/res/cs_border_segment.glsl  | 132 +++++++-------
+ gfx/wr/webrender/res/cs_border_solid.glsl    |  38 ++---
+ gfx/wr/webrender/res/cs_line_decoration.glsl |  51 +++---
+ gfx/wr/webrender/res/cs_svg_filter_node.glsl | 171 ++++---------------
+ gfx/wr/webrender/res/dithering.glsl          |   2 +-
+ gfx/wr/webrender/res/gpu_buffer.glsl         |  52 +++++-
+ gfx/wr/webrender/res/gradient.glsl           |   2 +-
+ gfx/wr/webrender/res/gradient_shared.glsl    |   2 +-
+ gfx/wr/webrender/res/image_source.glsl       |   6 +-
+ gfx/wr/webrender/res/prim_shared.glsl        |  18 +-
+ gfx/wr/webrender/res/ps_quad.glsl            |  49 +++---
+ gfx/wr/webrender/res/ps_quad_gradient.glsl   |  50 +++---
+ gfx/wr/webrender/res/ps_quad_mask.glsl       |   4 +-
+ gfx/wr/webrender/res/ps_split_composite.glsl |   2 +-
+ gfx/wr/webrender/res/ps_text_run.glsl        |  51 +++---
+ gfx/wr/webrender/res/render_task.glsl        |   4 +
+ gfx/wr/webrender/res/shared.glsl             |  11 +-
+ gfx/wr/webrender/res/transform.glsl          |   8 +-
+ gfx/wr/webrender/res/yuv.glsl                |  27 ++-
+ 27 files changed, 486 insertions(+), 494 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/base.glsl b/gfx/wr/webrender/res/base.glsl
+index e381ff6ca9c9..f8d9f14f3512 100644
+--- a/gfx/wr/webrender/res/base.glsl
++++ b/gfx/wr/webrender/res/base.glsl
+@@ -61,6 +61,8 @@
+     precision highp float;
+     #if __VERSION__ != 100
+         #define varying in
++    #else
++        precision highp int;
+     #endif
+ #endif
+ 
+@@ -68,3 +70,89 @@
+ #if __VERSION__ == 100
+     #define flat
+ #endif
++
++// GLSL ES 1.00: texelFetch on texel centres with the texture size from a
++// uniform (webrender_build rewrites the calls, see rewrite_for_gles2).
++#if __VERSION__ == 100
++    #define WR_TEXEL_FETCH(sampler, size, position, lod, offset) texture2D(sampler, (vec2((position) + (offset)) + 0.5) / (size))
++    #define WR_TEXEL_FETCH_I(sampler, size, position, lod, offset) ivec4(texture2D(sampler, (vec2((position) + (offset)) + 0.5) / (size)))
++    #define WR_TEXEL_FETCH1(sampler, size, position, lod) texture2D(sampler, (vec2(position) + 0.5) / (size))
++    #define WR_TEXEL_FETCH1_I(sampler, size, position, lod) ivec4(texture2D(sampler, (vec2(position) + 0.5) / (size)))
++#endif
++
++// Integer bit operations. ESSL 1 has no bitwise operators and no %;
++// there they are computed with floats, exact for magnitudes below 2^24.
++#if __VERSION__ == 100
++    float wr_pow2(int n) {
++        return exp2(float(n));
++    }
++
++    int wr_bits(int x, int shift, int count) {
++        float v = floor(float(x) / wr_pow2(shift));
++        float m = wr_pow2(count);
++        return int(v - floor(v / m) * m);
++    }
++
++    bool wr_has_flag(int x, int flag) {
++        float v = floor(float(x) / float(flag));
++        return v - 2.0 * floor(v / 2.0) > 0.5;
++    }
++
++    int wr_mod(int a, int b) {
++        return int(float(a) - floor(float(a) / float(b)) * float(b));
++    }
++
++    #define WR_BITS(x, shift, count) wr_bits(x, shift, count)
++    #define WR_HAS_FLAG(x, flag) wr_has_flag(x, flag)
++    #define WR_SHL(x, n) ((x) * int(wr_pow2(n)))
++    #define WR_SHR(x, n) int(floor(float(x) / wr_pow2(n)))
++    #define WR_MOD(a, b) wr_mod(a, b)
++#else
++    #define WR_BITS(x, shift, count) (((x) >> (shift)) & ((1 << (count)) - 1))
++    #define WR_HAS_FLAG(x, flag) (((x) & (flag)) != 0)
++    #define WR_SHL(x, n) ((x) << (n))
++    #define WR_SHR(x, n) ((x) >> (n))
++    #define WR_MOD(a, b) int(uint(a) % uint(b))
++#endif
++
++// Built-ins GLSL ES 1.00 lacks; webrender_build renames the calls for it
++// (mix with a boolean selector, transpose, inverse, round).
++#if __VERSION__ == 100
++    float wr_mix(float a, float b, float t) { return a + (b - a) * t; }
++    vec2 wr_mix(vec2 a, vec2 b, float t) { return a + (b - a) * t; }
++    vec3 wr_mix(vec3 a, vec3 b, float t) { return a + (b - a) * t; }
++    vec4 wr_mix(vec4 a, vec4 b, float t) { return a + (b - a) * t; }
++    vec2 wr_mix(vec2 a, vec2 b, vec2 t) { return a + (b - a) * t; }
++    vec3 wr_mix(vec3 a, vec3 b, vec3 t) { return a + (b - a) * t; }
++    vec4 wr_mix(vec4 a, vec4 b, vec4 t) { return a + (b - a) * t; }
++    float wr_mix(float a, float b, bool t) { return t ? b : a; }
++    vec2 wr_mix(vec2 a, vec2 b, bvec2 t) { return vec2(t.x ? b.x : a.x, t.y ? b.y : a.y); }
++    vec3 wr_mix(vec3 a, vec3 b, bvec3 t) {
++        return vec3(t.x ? b.x : a.x, t.y ? b.y : a.y, t.z ? b.z : a.z);
++    }
++    vec4 wr_mix(vec4 a, vec4 b, bvec4 t) {
++        return vec4(t.x ? b.x : a.x, t.y ? b.y : a.y, t.z ? b.z : a.z, t.w ? b.w : a.w);
++    }
++
++    mat2 wr_transpose(mat2 m) {
++        return mat2(m[0][0], m[1][0], m[0][1], m[1][1]);
++    }
++    mat3 wr_transpose(mat3 m) {
++        return mat3(m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1],
++                    m[0][2], m[1][2], m[2][2]);
++    }
++    mat4 wr_transpose(mat4 m) {
++        return mat4(m[0][0], m[1][0], m[2][0], m[3][0], m[0][1], m[1][1], m[2][1], m[3][1],
++                    m[0][2], m[1][2], m[2][2], m[3][2], m[0][3], m[1][3], m[2][3], m[3][3]);
++    }
++
++    mat2 wr_inverse(mat2 m) {
++        return mat2(m[1][1], -m[0][1], -m[1][0], m[0][0]) /
++               (m[0][0] * m[1][1] - m[0][1] * m[1][0]);
++    }
++
++    float wr_round(float x) { return floor(x + 0.5); }
++    vec2 wr_round(vec2 x) { return floor(x + 0.5); }
++    vec3 wr_round(vec3 x) { return floor(x + 0.5); }
++    vec4 wr_round(vec4 x) { return floor(x + 0.5); }
++#endif
+diff --git a/gfx/wr/webrender/res/blend.glsl b/gfx/wr/webrender/res/blend.glsl
+index d78d472e413b..dc646870f290 100644
+--- a/gfx/wr/webrender/res/blend.glsl
++++ b/gfx/wr/webrender/res/blend.glsl
+@@ -77,7 +77,7 @@ void SetupFilterParams(
+         );
+         color_offset = vec4(0.0);
+     } else if (op == FILTER_COLOR_MATRIX) {
+-        vec4 mat_data[4] = fetch_from_gpu_buffer_4f(gpu_data_address);
++        WR_GPU_BUFFER_FETCH_4(mat_data, gpu_data_address);
+         vec4 offset_data = fetch_from_gpu_buffer_1f(gpu_data_address + 4);
+         color_mat = mat4(mat_data[0], mat_data[1], mat_data[2], mat_data[3]);
+         color_offset = offset_data;
+@@ -149,38 +149,34 @@ vec4 ComponentTransfer(vec4 colora, vec4 vfuncs, highp int table_address) {
+     // Dynamically indexing a vector is buggy on some platforms, so use a temporary array
+     int[4] funcs = int[4](int(vfuncs.r), int(vfuncs.g), int(vfuncs.b), int(vfuncs.a));
+     for (int i = 0; i < 4; i++) {
+-        switch (funcs[i]) {
+-            case COMPONENT_TRANSFER_IDENTITY:
+-                break;
+-            case COMPONENT_TRANSFER_TABLE:
+-            case COMPONENT_TRANSFER_DISCRETE: {
++        {
++            int wr_switch_6 = int(funcs[i]);
++            if (wr_switch_6 == (COMPONENT_TRANSFER_IDENTITY)) {
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_TABLE) || wr_switch_6 == (COMPONENT_TRANSFER_DISCRETE)) { {
+                 // fetch value from lookup table
+                 k = int(floor(colora[i]*255.0 + 0.5));
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset + k/4);
+-                colora[i] = clamp(texel[k % 4], 0.0, 1.0);
++                colora[i] = clamp(texel[WR_MOD(k, 4)], 0.0, 1.0);
+                 // offset plus 256/4 blocks
+                 offset = offset + 64;
+-                break;
+-            }
+-            case COMPONENT_TRANSFER_LINEAR: {
++}
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_LINEAR)) { {
+                 // fetch the two values for use in the linear equation
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset);
+                 colora[i] = clamp(texel[0] * colora[i] + texel[1], 0.0, 1.0);
+                 // offset plus 1 block
+                 offset = offset + 1;
+-                break;
+-            }
+-            case COMPONENT_TRANSFER_GAMMA: {
++}
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_GAMMA)) { {
+                 // fetch the three values for use in the gamma equation
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset);
+                 colora[i] = clamp(texel[0] * pow(colora[i], texel[1]) + texel[2], 0.0, 1.0);
+                 // offset plus 1 block
+                 offset = offset + 1;
+-                break;
+-            }
+-            default:
++}
++            } else {
+                 // shouldn't happen
+-                break;
++            }
+         }
+     }
+     return colora;
+@@ -201,40 +197,35 @@ void CalculateFilter(
+     alpha = Cs.a;
+     color = alpha != 0.0 ? Cs.rgb / alpha : Cs.rgb;
+ 
+-    switch (op) {
+-        case FILTER_CONTRAST:
++    {
++        int wr_switch_7 = int(op);
++        if (wr_switch_7 == (FILTER_CONTRAST)) {
+             color = Contrast(color, amount);
+-            break;
+-        case FILTER_INVERT:
++        } else if (wr_switch_7 == (FILTER_INVERT)) {
+             color = Invert(color, amount);
+-            break;
+-        case FILTER_BRIGHTNESS:
++        } else if (wr_switch_7 == (FILTER_BRIGHTNESS)) {
+             color = Brightness(color, amount);
+-            break;
+-        case FILTER_SRGB_TO_LINEAR:
++        } else if (wr_switch_7 == (FILTER_SRGB_TO_LINEAR)) {
+             color = SrgbToLinear(color);
+-            break;
+-        case FILTER_LINEAR_TO_SRGB:
++        } else if (wr_switch_7 == (FILTER_LINEAR_TO_SRGB)) {
+             color = LinearToSrgb(color);
+-            break;
+-        case FILTER_COMPONENT_TRANSFER: {
++        } else if (wr_switch_7 == (FILTER_COMPONENT_TRANSFER)) { {
+             // Get the unpremultiplied color with alpha.
+             vec4 colora = vec4(color, alpha);
+             colora = ComponentTransfer(colora, v_funcs, table_address);
+             color = colora.rgb;
+             alpha = colora.a;
+-            break;
+-        }
+-        case FILTER_FLOOD:
++}
++        } else if (wr_switch_7 == (FILTER_FLOOD)) {
+             color = color_offset.rgb;
+             alpha = color_offset.a;
+-            break;
+-        default:
++        } else {
+             // Color matrix type filters (sepia, hue-rotate, etc...)
+             vec4 result = color_mat * vec4(color, alpha) + color_offset;
+             result = clamp(result, vec4(0.0), vec4(1.0));
+             color = result.rgb;
+             alpha = result.a;
++        }
+     }
+ }
+ #endif
+diff --git a/gfx/wr/webrender/res/brush.glsl b/gfx/wr/webrender/res/brush.glsl
+index 8a34cec28357..7808cedb6c9a 100644
+--- a/gfx/wr/webrender/res/brush.glsl
++++ b/gfx/wr/webrender/res/brush.glsl
+@@ -99,8 +99,8 @@ void brush_shader_main_vs(
+     PictureTask pic_task,
+     ClipArea clip_area
+ ) {
+-    int edge_flags = (instance.flags >> 12) & 0xf;
+-    int brush_flags = instance.flags & 0xfff;
++    int edge_flags = WR_BITS(instance.flags, 12, 4);
++    int brush_flags = WR_BITS(instance.flags, 0, 12);
+ 
+     // Fetch the segment of this brush primitive we are drawing.
+     vec4 segment_data;
+@@ -114,7 +114,7 @@ void brush_shader_main_vs(
+                               VECS_PER_SPECIFIC_BRUSH +
+                               instance.segment_index * VECS_PER_SEGMENT;
+ 
+-        vec4[2] segment_info = fetch_from_gpu_buffer_2f(segment_address);
++        WR_GPU_BUFFER_FETCH_2(segment_info, segment_address);
+         segment_rect = RectWithEndpoint(segment_info[0].xy, segment_info[0].zw);
+         segment_rect.p0 += ph.local_rect.p0;
+         segment_rect.p1 += ph.local_rect.p0;
+@@ -125,7 +125,7 @@ void brush_shader_main_vs(
+     // it is inflated.
+     RectWithEndpoint adjusted_segment_rect = segment_rect;
+ 
+-    bool antialiased = !transform.is_axis_aligned || ((brush_flags & BRUSH_FLAG_FORCE_AA) != 0);
++    bool antialiased = !transform.is_axis_aligned || (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_FORCE_AA));
+ 
+     // Write the normal vertex information out.
+     if (antialiased) {
+diff --git a/gfx/wr/webrender/res/brush_blend.glsl b/gfx/wr/webrender/res/brush_blend.glsl
+index a29bed5a3bbc..cb8c0384c95e 100644
+--- a/gfx/wr/webrender/res/brush_blend.glsl
++++ b/gfx/wr/webrender/res/brush_blend.glsl
+@@ -60,7 +60,7 @@ void brush_vs(
+     vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
+     f = get_image_quad_uv(prim_user_data.x, f);
+     vec2 uv = mix(uv0, uv1, f);
+-    float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
++    float perspective_interpolate = WR_HAS_FLAG(brush_flags, BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) ? 1.0 : 0.0;
+ 
+     v_uv = uv * inv_texture_size * mix(vi.world_pos.w, 1.0, perspective_interpolate);
+     v_perspective = perspective_interpolate;
+@@ -69,13 +69,13 @@ void brush_vs(
+ 
+     float amount = float(prim_user_data.z) / 65536.0;
+ 
+-    v_op = prim_user_data.y & 0xffff;
++    v_op = WR_BITS(prim_user_data.y, 0, 16);
+     v_amount = amount;
+ 
+-    v_funcs.r = float((prim_user_data.y >> 28) & 0xf);
+-    v_funcs.g = float((prim_user_data.y >> 24) & 0xf);
+-    v_funcs.b = float((prim_user_data.y >> 20) & 0xf);
+-    v_funcs.a = float((prim_user_data.y >> 16) & 0xf);
++    v_funcs.r = float(WR_BITS(prim_user_data.y, 28, 4));
++    v_funcs.g = float(WR_BITS(prim_user_data.y, 24, 4));
++    v_funcs.b = float(WR_BITS(prim_user_data.y, 20, 4));
++    v_funcs.a = float(WR_BITS(prim_user_data.y, 16, 4));
+ 
+     SetupFilterParams(
+         v_op,
+diff --git a/gfx/wr/webrender/res/brush_image.glsl b/gfx/wr/webrender/res/brush_image.glsl
+index 53f1c21fd9f5..1e2f93118d78 100644
+--- a/gfx/wr/webrender/res/brush_image.glsl
++++ b/gfx/wr/webrender/res/brush_image.glsl
+@@ -38,7 +38,7 @@ struct ImageBrushPrimitiveData {
+ };
+ 
+ ImageBrushPrimitiveData fetch_image_data(int address) {
+-    vec4[3] raw_data = fetch_from_gpu_buffer_3f(address);
++    WR_GPU_BUFFER_FETCH_3(raw_data, address);
+     ImageBrushPrimitiveData data = ImageBrushPrimitiveData(
+         raw_data[0],
+         raw_data[1],
+@@ -85,11 +85,11 @@ void brush_vs(
+ 
+     // If this segment should interpolate relative to the
+     // segment, modify the parameters for that.
+-    if ((brush_flags & BRUSH_FLAG_SEGMENT_RELATIVE) != 0) {
++    if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_RELATIVE)) {
+         local_rect = segment_rect;
+         stretch_size = rect_size(local_rect);
+ 
+-        if ((brush_flags & BRUSH_FLAG_TEXEL_RECT) != 0) {
++        if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_TEXEL_RECT)) {
+             // If the extra data is a texel rect, modify the UVs.
+             vec2 uv_size = res.uv_rect.p1 - res.uv_rect.p0;
+             uv0 = res.uv_rect.p0 + segment_data.xy * uv_size;
+@@ -99,7 +99,7 @@ void brush_vs(
+         #ifdef WR_FEATURE_REPETITION
+             // TODO(bug 1609893): Move this logic to the CPU as well as other sources of
+             // branchiness in this shader.
+-            if ((brush_flags & BRUSH_FLAG_TEXEL_RECT) != 0) {
++            if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_TEXEL_RECT)) {
+                 // Value of the stretch size with repetition. We have to compute it for
+                 // both axis even if we only repeat on one axis because the value for
+                 // each axis depends on what the repeated value would have been for the
+@@ -115,7 +115,7 @@ void brush_vs(
+                 vec2 vertical_uv_size = uv1 - uv0;
+                 // We use top and left sizes by default and fall back to bottom and right
+                 // when a size is empty.
+-                if ((brush_flags & BRUSH_FLAG_SEGMENT_NINEPATCH_MIDDLE) != 0) {
++                if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_NINEPATCH_MIDDLE)) {
+                     repeated_stretch_size = segment_rect.p0 - prim_rect.p0;
+ 
+                     float epsilon = 0.001;
+@@ -137,29 +137,29 @@ void brush_vs(
+                     }
+                 }
+ 
+-                if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_X) != 0) {
++                if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_X)) {
+                     float uv_ratio = horizontal_uv_size.x / horizontal_uv_size.y;
+                     stretch_size.x = repeated_stretch_size.y * uv_ratio;
+                 }
+-                if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_Y) != 0) {
++                if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_Y)) {
+                     float uv_ratio = vertical_uv_size.y / vertical_uv_size.x;
+                     stretch_size.y = repeated_stretch_size.x * uv_ratio;
+                 }
+ 
+             } else {
+-                if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_X) != 0) {
++                if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_X)) {
+                     stretch_size.x = segment_data.z - segment_data.x;
+                 }
+-                if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_Y) != 0) {
++                if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_Y)) {
+                     stretch_size.y = segment_data.w - segment_data.y;
+                 }
+             }
+-            if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_X_ROUND) != 0) {
++            if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_X_ROUND)) {
+                 float segment_rect_width = segment_rect.p1.x - segment_rect.p0.x;
+                 float nx = max(1.0, round(segment_rect_width / stretch_size.x));
+                 stretch_size.x = segment_rect_width / nx;
+             }
+-            if ((brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_Y_ROUND) != 0) {
++            if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_Y_ROUND)) {
+                 float segment_rect_height = segment_rect.p1.y - segment_rect.p0.y;
+                 float ny = max(1.0, round(segment_rect_height / stretch_size.y));
+                 stretch_size.y = segment_rect_height / ny;
+@@ -167,7 +167,7 @@ void brush_vs(
+         #endif
+     }
+ 
+-    float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
++    float perspective_interpolate = WR_HAS_FLAG(brush_flags, BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) ? 1.0 : 0.0;
+     v_perspective.x = perspective_interpolate;
+ 
+     // We deliberately only support the normalized UVs flag when *not* using
+@@ -178,7 +178,7 @@ void brush_vs(
+     // See bug 1932416 and bug 1929799.
+ #ifndef WR_FEATURE_REPETITION
+     vec2 uv_scale = mix(vec2(1.0), texture_size,
+-                        bvec2((brush_flags & BRUSH_FLAG_NORMALIZED_UVS) != 0));
++                        bvec2(WR_HAS_FLAG(brush_flags, BRUSH_FLAG_NORMALIZED_UVS)));
+     uv0 *= uv_scale;
+     uv1 *= uv_scale;
+ #endif
+@@ -196,8 +196,8 @@ void brush_vs(
+     vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
+ 
+ #ifdef WR_FEATURE_ALPHA_PASS
+-    int color_mode = prim_user_data.x & 0xffff;
+-    int blend_mode = prim_user_data.x >> 16;
++    int color_mode = WR_BITS(prim_user_data.x, 0, 16);
++    int blend_mode = WR_SHR(prim_user_data.x, 16);
+ 
+ #endif
+ 
+@@ -248,8 +248,8 @@ void brush_vs(
+     //   adjusted_offset = (1 - fract(repeat/2 - 1/2 + 1)) * uv_size
+     //
+     // We then separate the normalized part of the offset which we also need elsewhere.
+-    bvec2 centered = bvec2(brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_X_CENTERED,
+-                           brush_flags & BRUSH_FLAG_SEGMENT_REPEAT_Y_CENTERED);
++    bvec2 centered = bvec2(WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_X_CENTERED),
++                           WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_REPEAT_Y_CENTERED));
+     // Use mix() rather than if statements due to a miscompilation on Adreno 3xx. See bug 1853573.
+     normalized_offset = mix(vec2(0.0), 1.0 - fract(repeat * 0.5 + 0.5), centered);
+     v_uv += normalized_offset * (max_uv - min_uv);
+@@ -276,19 +276,18 @@ void brush_vs(
+     v_tile_repeat_bounds = repeat.xy + normalized_offset;
+ 
+     float opacity = float(prim_user_data.z) / 65535.0;
+-    switch (blend_mode) {
+-        case BLEND_MODE_ALPHA:
++    {
++        int wr_switch_6 = int(blend_mode);
++        if (wr_switch_6 == (BLEND_MODE_ALPHA)) {
+             image_data.color.a *= opacity;
+-            break;
+-        case BLEND_MODE_PREMUL_ALPHA:
+-        default:
++        } else {
+             image_data.color *= opacity;
+-            break;
++        }
+     }
+ 
+-    switch (color_mode) {
+-        case COLOR_MODE_ALPHA:
+-        case COLOR_MODE_BITMAP_SHADOW:
++    {
++        int wr_switch_7 = int(color_mode);
++        if (wr_switch_7 == (COLOR_MODE_ALPHA) || wr_switch_7 == (COLOR_MODE_BITMAP_SHADOW)) {
+             #ifdef SWGL_BLEND
+                 swgl_blendDropShadow(image_data.color);
+                 v_mask_swizzle = vec2(1.0, 0.0);
+@@ -297,26 +296,22 @@ void brush_vs(
+                 v_mask_swizzle = vec2(0.0, 1.0);
+                 v_color = image_data.color;
+             #endif
+-            break;
+-        case COLOR_MODE_IMAGE:
++        } else if (wr_switch_7 == (COLOR_MODE_IMAGE)) {
+             v_mask_swizzle = vec2(1.0, 0.0);
+             v_color = image_data.color;
+-            break;
+-        case COLOR_MODE_COLOR_BITMAP:
++        } else if (wr_switch_7 == (COLOR_MODE_COLOR_BITMAP)) {
+             v_mask_swizzle = vec2(1.0, 0.0);
+             v_color = vec4(image_data.color.a);
+-            break;
+-        case COLOR_MODE_SUBPX_DUAL_SOURCE:
++        } else if (wr_switch_7 == (COLOR_MODE_SUBPX_DUAL_SOURCE)) {
+             v_mask_swizzle = vec2(image_data.color.a, 0.0);
+             v_color = image_data.color;
+-            break;
+-        case COLOR_MODE_MULTIPLY_DUAL_SOURCE:
++        } else if (wr_switch_7 == (COLOR_MODE_MULTIPLY_DUAL_SOURCE)) {
+             v_mask_swizzle = vec2(-image_data.color.a, image_data.color.a);
+             v_color = image_data.color;
+-            break;
+-        default:
++        } else {
+             v_mask_swizzle = vec2(0.0);
+             v_color = vec4(1.0);
++        }
+     }
+ #endif
+ }
+diff --git a/gfx/wr/webrender/res/brush_mix_blend.glsl b/gfx/wr/webrender/res/brush_mix_blend.glsl
+index 5fb6ff36c2e1..b8a09a4450fb 100644
+--- a/gfx/wr/webrender/res/brush_mix_blend.glsl
++++ b/gfx/wr/webrender/res/brush_mix_blend.glsl
+@@ -56,7 +56,7 @@ void brush_vs(
+     vec4 unused
+ ) {
+     vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
+-    float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
++    float perspective_interpolate = WR_HAS_FLAG(brush_flags, BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) ? 1.0 : 0.0;
+     float perspective_f = mix(vi.world_pos.w, 1.0, perspective_interpolate);
+     v_perspective.x = perspective_interpolate;
+     v_op.x = prim_user_data.x;
+@@ -266,61 +266,47 @@ Fragment brush_fs() {
+     // gets optimized away by glslopt. Adding a bitwise AND prevents that.
+     // See bug 1726755.
+     // default: default: to appease angle_shader_validation
+-    switch (v_op.x & 0xFF) {
+-        case MixBlendMode_Multiply:
++    {
++        int wr_switch_5 = int(WR_BITS(v_op.x, 0, 8));
++        if (wr_switch_5 == (MixBlendMode_Multiply)) {
+             result.rgb = Multiply(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Overlay:
++        } else if (wr_switch_5 == (MixBlendMode_Overlay)) {
+             // Overlay is inverse of Hardlight
+             result.rgb = HardLight(Cs.rgb, Cb.rgb);
+-            break;
+-        case MixBlendMode_Darken:
++        } else if (wr_switch_5 == (MixBlendMode_Darken)) {
+             result.rgb = min(Cs.rgb, Cb.rgb);
+-            break;
+-        case MixBlendMode_Lighten:
++        } else if (wr_switch_5 == (MixBlendMode_Lighten)) {
+             result.rgb = max(Cs.rgb, Cb.rgb);
+-            break;
+-        case MixBlendMode_ColorDodge:
++        } else if (wr_switch_5 == (MixBlendMode_ColorDodge)) {
+             result.r = ColorDodge(Cb.r, Cs.r);
+             result.g = ColorDodge(Cb.g, Cs.g);
+             result.b = ColorDodge(Cb.b, Cs.b);
+-            break;
+-        case MixBlendMode_ColorBurn:
++        } else if (wr_switch_5 == (MixBlendMode_ColorBurn)) {
+             result.r = ColorBurn(Cb.r, Cs.r);
+             result.g = ColorBurn(Cb.g, Cs.g);
+             result.b = ColorBurn(Cb.b, Cs.b);
+-            break;
+-        case MixBlendMode_HardLight:
++        } else if (wr_switch_5 == (MixBlendMode_HardLight)) {
+             result.rgb = HardLight(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_SoftLight:
++        } else if (wr_switch_5 == (MixBlendMode_SoftLight)) {
+             result.r = SoftLight(Cb.r, Cs.r);
+             result.g = SoftLight(Cb.g, Cs.g);
+             result.b = SoftLight(Cb.b, Cs.b);
+-            break;
+-        case MixBlendMode_Difference:
++        } else if (wr_switch_5 == (MixBlendMode_Difference)) {
+             result.rgb = Difference(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Hue:
++        } else if (wr_switch_5 == (MixBlendMode_Hue)) {
+             result.rgb = Hue(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Saturation:
++        } else if (wr_switch_5 == (MixBlendMode_Saturation)) {
+             result.rgb = Saturation(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Color:
++        } else if (wr_switch_5 == (MixBlendMode_Color)) {
+             result.rgb = Color(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Luminosity:
++        } else if (wr_switch_5 == (MixBlendMode_Luminosity)) {
+             result.rgb = Luminosity(Cb.rgb, Cs.rgb);
+-            break;
+-        case MixBlendMode_Screen:
+-        case MixBlendMode_Exclusion:
+-        case MixBlendMode_PlusLighter:
++        } else if (wr_switch_5 == (MixBlendMode_Screen) || wr_switch_5 == (MixBlendMode_Exclusion) || wr_switch_5 == (MixBlendMode_PlusLighter)) {
+             // This should be unreachable, since we implement
+             // MixBlendMode::Screen, MixBlendMode::Exclusion and
+             // MixBlendMode::PlusLighter using glBlendFuncSeparate.
+-            break;
+-        default: break;
++        } else {
++        }
+     }
+ 
+     result.rgb = (1.0 - Cb.a) * Cs.rgb + Cb.a * result.rgb;
+diff --git a/gfx/wr/webrender/res/brush_opacity.glsl b/gfx/wr/webrender/res/brush_opacity.glsl
+index caef83304abb..961332732624 100644
+--- a/gfx/wr/webrender/res/brush_opacity.glsl
++++ b/gfx/wr/webrender/res/brush_opacity.glsl
+@@ -40,7 +40,7 @@ void brush_vs(
+     vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
+     f = get_image_quad_uv(prim_user_data.x, f);
+     vec2 uv = mix(uv0, uv1, f);
+-    float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
++    float perspective_interpolate = WR_HAS_FLAG(brush_flags, BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) ? 1.0 : 0.0;
+ 
+     v_uv = uv / texture_size * mix(vi.world_pos.w, 1.0, perspective_interpolate);
+     v_perspective = perspective_interpolate;
+diff --git a/gfx/wr/webrender/res/cs_blur.glsl b/gfx/wr/webrender/res/cs_blur.glsl
+index c8a1f7935f26..1e73179ff3e8 100644
+--- a/gfx/wr/webrender/res/cs_blur.glsl
++++ b/gfx/wr/webrender/res/cs_blur.glsl
+@@ -96,21 +96,21 @@ void main(void) {
+         vGaussCoefficients = vec2(1.0, 1.0);
+     }
+ 
+-    switch (aBlurDirection) {
+-        case DIR_HORIZONTAL:
++    {
++        int wr_switch_23 = int(aBlurDirection);
++        if (wr_switch_23 == (DIR_HORIZONTAL)) {
+             vOffsetScale = vec2(
+                 1.0 / (src_rect.p1.x - src_rect.p0.x),
+                 0.0
+             );
+-            break;
+-        case DIR_VERTICAL:
++        } else if (wr_switch_23 == (DIR_VERTICAL)) {
+             vOffsetScale = vec2(
+                 0.0,
+                 1.0 / (src_rect.p1.y - src_rect.p0.y)
+             );
+-            break;
+-        default:
++        } else {
+             vOffsetScale = vec2(0.0);
++        }
+     }
+ 
+     vUvRect = vec4(src_rect.p0, src_rect.p1);
+diff --git a/gfx/wr/webrender/res/cs_border_segment.glsl b/gfx/wr/webrender/res/cs_border_segment.glsl
+index bce9f5527178..745704f903f1 100644
+--- a/gfx/wr/webrender/res/cs_border_segment.glsl
++++ b/gfx/wr/webrender/res/cs_border_segment.glsl
+@@ -87,23 +87,20 @@ PER_INSTANCE attribute vec4 aClipParams2;
+ vec2 get_outer_corner_scale(int segment) {
+     vec2 p;
+ 
+-    switch (segment) {
+-        case SEGMENT_TOP_LEFT:
++    {
++        int wr_switch_16 = int(segment);
++        if (wr_switch_16 == (SEGMENT_TOP_LEFT)) {
+             p = vec2(0.0, 0.0);
+-            break;
+-        case SEGMENT_TOP_RIGHT:
++        } else if (wr_switch_16 == (SEGMENT_TOP_RIGHT)) {
+             p = vec2(1.0, 0.0);
+-            break;
+-        case SEGMENT_BOTTOM_RIGHT:
++        } else if (wr_switch_16 == (SEGMENT_BOTTOM_RIGHT)) {
+             p = vec2(1.0, 1.0);
+-            break;
+-        case SEGMENT_BOTTOM_LEFT:
++        } else if (wr_switch_16 == (SEGMENT_BOTTOM_LEFT)) {
+             p = vec2(0.0, 1.0);
+-            break;
+-        default:
++        } else {
+             // The result is only used for non-default segment cases
+             p = vec2(0.0);
+-            break;
++        }
+     }
+ 
+     return p;
+@@ -136,29 +133,28 @@ vec4[2] get_colors_for_side(vec4 color, int style) {
+ 
+     bool is_black = color.rgb == vec3(0.0, 0.0, 0.0);
+ 
+-    switch (style) {
+-        case BORDER_STYLE_GROOVE:
++    {
++        int wr_switch_17 = int(style);
++        if (wr_switch_17 == (BORDER_STYLE_GROOVE)) {
+             result[0] = mod_color(color, is_black, true);
+             result[1] = mod_color(color, is_black, false);
+-            break;
+-        case BORDER_STYLE_RIDGE:
++        } else if (wr_switch_17 == (BORDER_STYLE_RIDGE)) {
+             result[0] = mod_color(color, is_black, false);
+             result[1] = mod_color(color, is_black, true);
+-            break;
+-        default:
++        } else {
+             result[0] = color;
+             result[1] = color;
+-            break;
++        }
+     }
+ 
+     return result;
+ }
+ 
+ void main(void) {
+-    int segment = aFlags & 0xff;
+-    int style0 = (aFlags >> 8) & 0xff;
+-    int style1 = (aFlags >> 16) & 0xff;
+-    int clip_mode = (aFlags >> 24) & 0x0f;
++    int segment = WR_BITS(aFlags, 0, 8);
++    int style0 = WR_BITS(aFlags, 8, 8);
++    int style1 = WR_BITS(aFlags, 16, 8);
++    int clip_mode = WR_BITS(aFlags, 24, 4);
+ 
+     vec2 size = aRect.zw - aRect.xy;
+     vec2 outer_scale = get_outer_corner_scale(segment);
+@@ -171,31 +167,24 @@ void main(void) {
+     // Derive the positions for the edge clips, which must be handled
+     // differently between corners and edges.
+     vec2 edge_reference = vec2(0.0);
+-    switch (segment) {
+-        case SEGMENT_TOP_LEFT:
++    {
++        int wr_switch_18 = int(segment);
++        if (wr_switch_18 == (SEGMENT_TOP_LEFT)) {
+             edge_axis = ivec2(0, 1);
+             edge_reference = outer;
+-            break;
+-        case SEGMENT_TOP_RIGHT:
++        } else if (wr_switch_18 == (SEGMENT_TOP_RIGHT)) {
+             edge_axis = ivec2(1, 0);
+             edge_reference = vec2(outer.x - aWidths.x, outer.y);
+-            break;
+-        case SEGMENT_BOTTOM_RIGHT:
++        } else if (wr_switch_18 == (SEGMENT_BOTTOM_RIGHT)) {
+             edge_axis = ivec2(0, 1);
+             edge_reference = outer - aWidths;
+-            break;
+-        case SEGMENT_BOTTOM_LEFT:
++        } else if (wr_switch_18 == (SEGMENT_BOTTOM_LEFT)) {
+             edge_axis = ivec2(1, 0);
+             edge_reference = vec2(outer.x, outer.y - aWidths.y);
+-            break;
+-        case SEGMENT_TOP:
+-        case SEGMENT_BOTTOM:
++        } else if (wr_switch_18 == (SEGMENT_TOP) || wr_switch_18 == (SEGMENT_BOTTOM)) {
+             edge_axis = ivec2(1, 1);
+-            break;
+-        case SEGMENT_LEFT:
+-        case SEGMENT_RIGHT:
+-        default:
+-            break;
++        } else {
++        }
+     }
+ 
+     vSegmentClipMode = vec2(float(segment), float(clip_mode));
+@@ -257,8 +246,9 @@ vec4 evaluate_color_for_style_in_corner(
+     int segment,
+     float aa_range
+ ) {
+-    switch (style) {
+-        case BORDER_STYLE_DOUBLE: {
++    {
++        int wr_switch_8 = int(style);
++        if (wr_switch_8 == (BORDER_STYLE_DOUBLE)) { {
+             // Get the distances from 0.33 of the radii, and
+             // also 0.67 of the radii. Use these to form a
+             // SDF subtraction which will clip out the inside
+@@ -273,30 +263,29 @@ vec4 evaluate_color_for_style_in_corner(
+             );
+             float d = min(-d_radii_a, d_radii_b);
+             color0 *= distance_aa(aa_range, d);
+-            break;
+-        }
+-        case BORDER_STYLE_GROOVE:
+-        case BORDER_STYLE_RIDGE: {
++}
++        } else if (wr_switch_8 == (BORDER_STYLE_GROOVE) || wr_switch_8 == (BORDER_STYLE_RIDGE)) { {
+             float d = distance_to_ellipse(
+                 clip_relative_pos,
+                 clip_radii.xy - vPartialWidths.zw
+             );
+             float alpha = distance_aa(aa_range, d);
+             float swizzled_factor;
+-            switch (segment) {
+-                case SEGMENT_TOP_LEFT: swizzled_factor = 0.0; break;
+-                case SEGMENT_TOP_RIGHT: swizzled_factor = mix_factor; break;
+-                case SEGMENT_BOTTOM_RIGHT: swizzled_factor = 1.0; break;
+-                case SEGMENT_BOTTOM_LEFT: swizzled_factor = 1.0 - mix_factor; break;
+-                default: swizzled_factor = 0.0; break;
++            {
++                int wr_switch_20 = int(segment);
++                if (wr_switch_20 == (SEGMENT_TOP_LEFT)) { swizzled_factor = 0.0;
++                } else if (wr_switch_20 == (SEGMENT_TOP_RIGHT)) { swizzled_factor = mix_factor;
++                } else if (wr_switch_20 == (SEGMENT_BOTTOM_RIGHT)) { swizzled_factor = 1.0;
++                } else if (wr_switch_20 == (SEGMENT_BOTTOM_LEFT)) { swizzled_factor = 1.0 - mix_factor;
++                } else { swizzled_factor = 0.0;
++                }
+             };
+             vec4 c0 = mix(color1, color0, swizzled_factor);
+             vec4 c1 = mix(color0, color1, swizzled_factor);
+             color0 = mix(c0, c1, alpha);
+-            break;
++}
++        } else {
+         }
+-        default:
+-            break;
+     }
+ 
+     return color0;
+@@ -312,8 +301,9 @@ vec4 evaluate_color_for_style_in_edge(
+ ) {
+     vec2 edge_axis = edge_axis_id != 0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+     float pos = dot(pos_vec, edge_axis);
+-    switch (style) {
+-        case BORDER_STYLE_DOUBLE: {
++    {
++        int wr_switch_9 = int(style);
++        if (wr_switch_9 == (BORDER_STYLE_DOUBLE)) { {
+             float d = -1.0;
+             float partial_width = dot(vPartialWidths.xy, edge_axis);
+             if (partial_width >= 1.0) {
+@@ -324,18 +314,15 @@ vec4 evaluate_color_for_style_in_edge(
+                 d = min(pos - ref.x, ref.y - pos);
+             }
+             color0 *= distance_aa(aa_range, d);
+-            break;
+-        }
+-        case BORDER_STYLE_GROOVE:
+-        case BORDER_STYLE_RIDGE: {
++}
++        } else if (wr_switch_9 == (BORDER_STYLE_GROOVE) || wr_switch_9 == (BORDER_STYLE_RIDGE)) { {
+             float ref = dot(vEdgeReference.xy + vPartialWidths.zw, edge_axis);
+             float d = pos - ref;
+             float alpha = distance_aa(aa_range, d);
+             color0 = mix(color0, color1, alpha);
+-            break;
++}
++        } else {
+         }
+-        default:
+-            break;
+     }
+ 
+     return color0;
+@@ -361,13 +348,13 @@ void main(void) {
+     bool in_clip_region = all(lessThan(vClipCenter_Sign.zw * clip_relative_pos, vec2(0.0)));
+     float d = -1.0;
+ 
+-    switch (clip_mode) {
+-        case CLIP_DOT: {
++    {
++        int wr_switch_10 = int(clip_mode);
++        if (wr_switch_10 == (CLIP_DOT)) { {
+             // Set clip distance based or dot position and radius.
+             d = distance(vClipParams1.xy, vPos) - vClipParams1.z;
+-            break;
+-        }
+-        case CLIP_DASH_EDGE: {
++}
++        } else if (wr_switch_10 == (CLIP_DASH_EDGE)) { {
+             bool is_vertical = vClipParams1.x == 0.;
+             float half_dash = is_vertical ? vClipParams1.y : vClipParams1.x;
+             // We want to draw something like:
+@@ -379,9 +366,8 @@ void main(void) {
+             if (!in_dash) {
+                 d = 1.;
+             }
+-            break;
+-        }
+-        case CLIP_DASH_CORNER: {
++}
++        } else if (wr_switch_10 == (CLIP_DASH_CORNER)) { {
+             // Get SDF for the two line/tangent clip lines,
+             // do SDF subtract to get clip distance.
+             float d0 = distance_to_line(vClipParams1.xy,
+@@ -391,11 +377,9 @@ void main(void) {
+                                         vClipParams2.zw,
+                                         vPos);
+             d = max(d0, -d1);
+-            break;
++}
++        } else {
+         }
+-        case CLIP_NONE:
+-        default:
+-            break;
+     }
+ 
+     if (in_clip_region) {
+diff --git a/gfx/wr/webrender/res/cs_border_solid.glsl b/gfx/wr/webrender/res/cs_border_solid.glsl
+index ebbdaf149f87..b50e7982a404 100644
+--- a/gfx/wr/webrender/res/cs_border_solid.glsl
++++ b/gfx/wr/webrender/res/cs_border_solid.glsl
+@@ -59,31 +59,28 @@ PER_INSTANCE attribute vec4 aClipParams2;
+ vec2 get_outer_corner_scale(int segment) {
+     vec2 p;
+ 
+-    switch (segment) {
+-        case SEGMENT_TOP_LEFT:
++    {
++        int wr_switch_12 = int(segment);
++        if (wr_switch_12 == (SEGMENT_TOP_LEFT)) {
+             p = vec2(0.0, 0.0);
+-            break;
+-        case SEGMENT_TOP_RIGHT:
++        } else if (wr_switch_12 == (SEGMENT_TOP_RIGHT)) {
+             p = vec2(1.0, 0.0);
+-            break;
+-        case SEGMENT_BOTTOM_RIGHT:
++        } else if (wr_switch_12 == (SEGMENT_BOTTOM_RIGHT)) {
+             p = vec2(1.0, 1.0);
+-            break;
+-        case SEGMENT_BOTTOM_LEFT:
++        } else if (wr_switch_12 == (SEGMENT_BOTTOM_LEFT)) {
+             p = vec2(0.0, 1.0);
+-            break;
+-        default:
++        } else {
+             // The result is only used for non-default segment cases
+             p = vec2(0.0);
+-            break;
++        }
+     }
+ 
+     return p;
+ }
+ 
+ void main(void) {
+-    int segment = aFlags & 0xff;
+-    bool do_aa = ((aFlags >> 24) & 0xf0) != 0;
++    int segment = WR_BITS(aFlags, 0, 8);
++    bool do_aa = WR_BITS(aFlags, 28, 4) != 0;
+ 
+     vec2 outer_scale = get_outer_corner_scale(segment);
+     vec2 size = aRect.zw - aRect.xy;
+@@ -91,17 +88,14 @@ void main(void) {
+     vec2 clip_sign = 1.0 - 2.0 * outer_scale;
+ 
+     int mix_colors;
+-    switch (segment) {
+-        case SEGMENT_TOP_LEFT:
+-        case SEGMENT_TOP_RIGHT:
+-        case SEGMENT_BOTTOM_RIGHT:
+-        case SEGMENT_BOTTOM_LEFT: {
++    {
++        int wr_switch_5 = int(segment);
++        if (wr_switch_5 == (SEGMENT_TOP_LEFT) || wr_switch_5 == (SEGMENT_TOP_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_LEFT)) { {
+             mix_colors = do_aa ? MIX_AA : MIX_NO_AA;
+-            break;
+-        }
+-        default:
++}
++        } else {
+             mix_colors = DONT_MIX;
+-            break;
++        }
+     }
+ 
+     vMixColors.x = mix_colors;
+diff --git a/gfx/wr/webrender/res/cs_line_decoration.glsl b/gfx/wr/webrender/res/cs_line_decoration.glsl
+index 3b94274d12c4..be3b25950599 100644
+--- a/gfx/wr/webrender/res/cs_line_decoration.glsl
++++ b/gfx/wr/webrender/res/cs_line_decoration.glsl
+@@ -44,18 +44,17 @@ void main(void) {
+     vec2 size = mix(aLocalSize, aLocalSize.yx, aAxisSelect);
+     vStyle.x = aStyle;
+ 
+-    switch (vStyle.x) {
+-        case LINE_STYLE_SOLID: {
+-            break;
+-        }
+-        case LINE_STYLE_DASHED: {
++    {
++        int wr_switch_3 = int(vStyle.x);
++        if (wr_switch_3 == (LINE_STYLE_SOLID)) { {
++}
++        } else if (wr_switch_3 == (LINE_STYLE_DASHED)) { {
+             vParams = vec4(size.x,          // period
+                            0.5 * size.x,    // dash length
+                            0.0,
+                            0.0);
+-            break;
+-        }
+-        case LINE_STYLE_DOTTED: {
++}
++        } else if (wr_switch_3 == (LINE_STYLE_DOTTED)) { {
+             float diameter = size.y;
+             float period = diameter * 2.0;
+             float center_line = 0.5 * size.y;
+@@ -63,9 +62,8 @@ void main(void) {
+                            diameter / 2.0, // radius
+                            center_line,
+                            0.0);
+-            break;
+-        }
+-        case LINE_STYLE_WAVY: {
++}
++        } else if (wr_switch_3 == (LINE_STYLE_WAVY)) { {
+             // This logic copied from gecko to get the same results
+             float line_thickness = max(aWavyLineThickness, 1.0);
+             // Difference in height between peaks and troughs
+@@ -78,10 +76,10 @@ void main(void) {
+                            slope_length,
+                            flat_length,
+                            size.y);
+-            break;
+-        }
+-        default:
++}
++        } else {
+             vParams = vec4(0.0);
++        }
+     }
+ 
+     vLocalPos = mix(aPosition.xy, aPosition.yx, aAxisSelect) * size;
+@@ -100,23 +98,21 @@ void main(void) {
+     float aa_range = compute_aa_range(pos);
+     float alpha = 1.0;
+ 
+-    switch (vStyle.x) {
+-        case LINE_STYLE_SOLID: {
+-            break;
+-        }
+-        case LINE_STYLE_DASHED: {
++    {
++        int wr_switch_4 = int(vStyle.x);
++        if (wr_switch_4 == (LINE_STYLE_SOLID)) { {
++}
++        } else if (wr_switch_4 == (LINE_STYLE_DASHED)) { {
+             // Calculate dash alpha (on/off) based on dash length
+             alpha = step(floor(pos.x + 0.5), vParams.y);
+-            break;
+-        }
+-        case LINE_STYLE_DOTTED: {
++}
++        } else if (wr_switch_4 == (LINE_STYLE_DOTTED)) { {
+             // Get the dot alpha
+             vec2 dot_relative_pos = pos - vParams.yz;
+             float dot_distance = length(dot_relative_pos) - vParams.y;
+             alpha = distance_aa(aa_range, dot_distance);
+-            break;
+-        }
+-        case LINE_STYLE_WAVY: {
++}
++        } else if (wr_switch_4 == (LINE_STYLE_WAVY)) { {
+             float half_line_thickness = vParams.x;
+             float slope_length = vParams.y;
+             float flat_length = vParams.z;
+@@ -154,10 +150,9 @@ void main(void) {
+             if (half_line_thickness <= 1.0) {
+                 alpha = 1.0 - step(alpha, MAGIC_WAVY_LINE_AA_SNAP);
+             }
+-
+-            break;
++}
++        } else {
+         }
+-        default: break;
+     }
+ 
+     oFragColor = vec4(alpha);
+diff --git a/gfx/wr/webrender/res/cs_svg_filter_node.glsl b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+index 8522ca3c1089..5310d5449337 100644
+--- a/gfx/wr/webrender/res/cs_svg_filter_node.glsl
++++ b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+@@ -223,178 +223,81 @@ void main(void) {
+     vFilterInputCount = aFilterInputCount;
+     vFilterKind = aFilterKind;
+ 
+-    switch (aFilterKind) {
+-        case FILTER_IDENTITY:
+-        case FILTER_IDENTITY_CONVERTSRGB:
+-            break;
+-        case FILTER_OPACITY:
+-        case FILTER_OPACITY_CONVERTSRGB:
++    {
++        int wr_switch_2 = int(aFilterKind);
++        if (wr_switch_2 == (FILTER_IDENTITY) || wr_switch_2 == (FILTER_IDENTITY_CONVERTSRGB)) {
++        } else if (wr_switch_2 == (FILTER_OPACITY) || wr_switch_2 == (FILTER_OPACITY_CONVERTSRGB)) {
+             // opacity takes one input and an alpha value, so we just stuffed
+             // that in the unused input 2 content rect
+             vFloat0.x = aFilterInput2ContentScaleAndOffset.x;
+-            break;
+-        case FILTER_TO_ALPHA:
+-        case FILTER_TO_ALPHA_CONVERTSRGB:
+-            break;
+-        case FILTER_BLEND_COLOR:
+-        case FILTER_BLEND_COLOR_CONVERTSRGB:
+-        case FILTER_BLEND_COLOR_BURN:
+-        case FILTER_BLEND_COLOR_BURN_CONVERTSRGB:
+-        case FILTER_BLEND_COLOR_DODGE:
+-        case FILTER_BLEND_COLOR_DODGE_CONVERTSRGB:
+-        case FILTER_BLEND_DARKEN:
+-        case FILTER_BLEND_DARKEN_CONVERTSRGB:
+-        case FILTER_BLEND_DIFFERENCE:
+-        case FILTER_BLEND_DIFFERENCE_CONVERTSRGB:
+-        case FILTER_BLEND_EXCLUSION:
+-        case FILTER_BLEND_EXCLUSION_CONVERTSRGB:
+-        case FILTER_BLEND_HARD_LIGHT:
+-        case FILTER_BLEND_HARD_LIGHT_CONVERTSRGB:
+-        case FILTER_BLEND_HUE:
+-        case FILTER_BLEND_HUE_CONVERTSRGB:
+-        case FILTER_BLEND_LIGHTEN:
+-        case FILTER_BLEND_LIGHTEN_CONVERTSRGB:
+-        case FILTER_BLEND_LUMINOSITY:
+-        case FILTER_BLEND_LUMINOSITY_CONVERTSRGB:
+-        case FILTER_BLEND_MULTIPLY:
+-        case FILTER_BLEND_MULTIPLY_CONVERTSRGB:
+-        case FILTER_BLEND_NORMAL:
+-        case FILTER_BLEND_NORMAL_CONVERTSRGB:
+-        case FILTER_BLEND_OVERLAY:
+-        case FILTER_BLEND_OVERLAY_CONVERTSRGB:
+-        case FILTER_BLEND_SATURATION:
+-        case FILTER_BLEND_SATURATION_CONVERTSRGB:
+-        case FILTER_BLEND_SCREEN:
+-        case FILTER_BLEND_SCREEN_CONVERTSRGB:
+-        case FILTER_BLEND_SOFT_LIGHT:
+-        case FILTER_BLEND_SOFT_LIGHT_CONVERTSRGB:
+-            break;
+-        case FILTER_COLOR_MATRIX:
+-        case FILTER_COLOR_MATRIX_CONVERTSRGB: {
++        } else if (wr_switch_2 == (FILTER_TO_ALPHA) || wr_switch_2 == (FILTER_TO_ALPHA_CONVERTSRGB)) {
++        } else if (wr_switch_2 == (FILTER_BLEND_COLOR) || wr_switch_2 == (FILTER_BLEND_COLOR_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DARKEN) || wr_switch_2 == (FILTER_BLEND_DARKEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_EXCLUSION) || wr_switch_2 == (FILTER_BLEND_EXCLUSION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HUE) || wr_switch_2 == (FILTER_BLEND_HUE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LIGHTEN) || wr_switch_2 == (FILTER_BLEND_LIGHTEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_MULTIPLY) || wr_switch_2 == (FILTER_BLEND_MULTIPLY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_NORMAL) || wr_switch_2 == (FILTER_BLEND_NORMAL_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_OVERLAY) || wr_switch_2 == (FILTER_BLEND_OVERLAY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SATURATION) || wr_switch_2 == (FILTER_BLEND_SATURATION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SCREEN) || wr_switch_2 == (FILTER_BLEND_SCREEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT_CONVERTSRGB)) {
++        } else if (wr_switch_2 == (FILTER_COLOR_MATRIX) || wr_switch_2 == (FILTER_COLOR_MATRIX_CONVERTSRGB)) { {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
+-            vec4 mat_data[4] = fetch_from_gpu_buffer_4f_direct(gpu_buffer_uv);
++            WR_GPU_BUFFER_FETCH_DIRECT_4(mat_data, gpu_buffer_uv);
+             vColorMat = mat4(mat_data[0], mat_data[1], mat_data[2], mat_data[3]);
+             vFilterData0 = fetch_from_gpu_buffer_1f_direct(gpu_buffer_uv + ivec2(4, 0));
+-            break;
+-        }
+-        case FILTER_COMPONENT_TRANSFER:
+-        case FILTER_COMPONENT_TRANSFER_CONVERTSRGB: {
++}
++        } else if (wr_switch_2 == (FILTER_COMPONENT_TRANSFER) || wr_switch_2 == (FILTER_COMPONENT_TRANSFER_CONVERTSRGB)) { {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
+             vData = ivec4(gpu_buffer_uv, 0, 0);
+-            break;
+-        }
+-        case FILTER_COMPOSITE_ARITHMETIC:
+-        case FILTER_COMPOSITE_ARITHMETIC_CONVERTSRGB:
++}
++        } else if (wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC) || wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC_CONVERTSRGB)) {
+             // arithmetic parameters
+             vFilterData0 = fetch_from_gpu_buffer_1f(aFilterExtraDataAddress);
+-            break;
+-        case FILTER_COMPOSITE_ATOP:
+-        case FILTER_COMPOSITE_ATOP_CONVERTSRGB:
+-        case FILTER_COMPOSITE_IN:
+-        case FILTER_COMPOSITE_IN_CONVERTSRGB:
+-        case FILTER_COMPOSITE_LIGHTER:
+-        case FILTER_COMPOSITE_LIGHTER_CONVERTSRGB:
+-        case FILTER_COMPOSITE_OUT:
+-        case FILTER_COMPOSITE_OUT_CONVERTSRGB:
+-        case FILTER_COMPOSITE_OVER:
+-        case FILTER_COMPOSITE_OVER_CONVERTSRGB:
+-        case FILTER_COMPOSITE_XOR:
+-        case FILTER_COMPOSITE_XOR_CONVERTSRGB:
+-            break;
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_DUPLICATE:
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_DUPLICATE_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_COMPOSITE_ATOP) || wr_switch_2 == (FILTER_COMPOSITE_ATOP_CONVERTSRGB) || wr_switch_2 == (FILTER_COMPOSITE_IN) || wr_switch_2 == (FILTER_COMPOSITE_IN_CONVERTSRGB) || wr_switch_2 == (FILTER_COMPOSITE_LIGHTER) || wr_switch_2 == (FILTER_COMPOSITE_LIGHTER_CONVERTSRGB) || wr_switch_2 == (FILTER_COMPOSITE_OUT) || wr_switch_2 == (FILTER_COMPOSITE_OUT_CONVERTSRGB) || wr_switch_2 == (FILTER_COMPOSITE_OVER) || wr_switch_2 == (FILTER_COMPOSITE_OVER_CONVERTSRGB) || wr_switch_2 == (FILTER_COMPOSITE_XOR) || wr_switch_2 == (FILTER_COMPOSITE_XOR_CONVERTSRGB)) {
++        } else if (wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_DUPLICATE) || wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_DUPLICATE_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_NONE:
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_NONE_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_NONE) || wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_NONE_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_WRAP:
+-        case FILTER_CONVOLVE_MATRIX_EDGE_MODE_WRAP_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_WRAP) || wr_switch_2 == (FILTER_CONVOLVE_MATRIX_EDGE_MODE_WRAP_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_DIFFUSE_LIGHTING_DISTANT:
+-        case FILTER_DIFFUSE_LIGHTING_DISTANT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_DISTANT) || wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_DISTANT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_DIFFUSE_LIGHTING_POINT:
+-        case FILTER_DIFFUSE_LIGHTING_POINT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_POINT) || wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_POINT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_DIFFUSE_LIGHTING_SPOT:
+-        case FILTER_DIFFUSE_LIGHTING_SPOT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_SPOT) || wr_switch_2 == (FILTER_DIFFUSE_LIGHTING_SPOT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_DISPLACEMENT_MAP:
+-        case FILTER_DISPLACEMENT_MAP_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_DISPLACEMENT_MAP) || wr_switch_2 == (FILTER_DISPLACEMENT_MAP_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_DROP_SHADOW:
++        } else if (wr_switch_2 == (FILTER_DROP_SHADOW)) {
+             vFilterData0 = fetch_from_gpu_buffer_1f(aFilterExtraDataAddress);
+             // premultiply the color
+             vFilterData0.rgb = vFilterData0.rgb * vFilterData0.a;
+-            break;
+-        case FILTER_DROP_SHADOW_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_DROP_SHADOW_CONVERTSRGB)) {
+             vFilterData0 = fetch_from_gpu_buffer_1f(aFilterExtraDataAddress);
+             // convert from sRGB to linearRGB and premultiply by alpha
+             vFilterData0.rgb = vertexSrgbToLinear(vFilterData0.rgb);
+             vFilterData0.rgb = vFilterData0.rgb * vFilterData0.a;
+-            break;
+-        case FILTER_FLOOD:
++        } else if (wr_switch_2 == (FILTER_FLOOD)) {
+             // feFlood has no actual input textures, so input 2 rect is color
+             vFilterData0 = aFilterInput2ContentScaleAndOffset;
+             // premultiply the color
+             vFilterData0.rgb = vFilterData0.rgb * vFilterData0.a;
+-            break;
+-        case FILTER_FLOOD_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_FLOOD_CONVERTSRGB)) {
+             // feFlood has no actual input textures, so input 2 rect is color
+             vFilterData0 = aFilterInput2ContentScaleAndOffset;
+             // convert from sRGB to linearRGB and premultiply by alpha
+             vFilterData0.rgb = vertexSrgbToLinear(vFilterData0.rgb);
+             vFilterData0.rgb = vFilterData0.rgb * vFilterData0.a;
+-            break;
+-        case FILTER_GAUSSIAN_BLUR:
+-        case FILTER_GAUSSIAN_BLUR_CONVERTSRGB:
+-            break;
+-        case FILTER_IMAGE:
+-        case FILTER_IMAGE_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_GAUSSIAN_BLUR) || wr_switch_2 == (FILTER_GAUSSIAN_BLUR_CONVERTSRGB)) {
++        } else if (wr_switch_2 == (FILTER_IMAGE) || wr_switch_2 == (FILTER_IMAGE_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_MORPHOLOGY_DILATE:
+-        case FILTER_MORPHOLOGY_DILATE_CONVERTSRGB:
+-        case FILTER_MORPHOLOGY_ERODE:
+-        case FILTER_MORPHOLOGY_ERODE_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_MORPHOLOGY_DILATE) || wr_switch_2 == (FILTER_MORPHOLOGY_DILATE_CONVERTSRGB) || wr_switch_2 == (FILTER_MORPHOLOGY_ERODE) || wr_switch_2 == (FILTER_MORPHOLOGY_ERODE_CONVERTSRGB)) {
+             // morphology filters have radius values in second input rect
+             vFilterData0 = aFilterInput2ContentScaleAndOffset;
+-            break;
+-        case FILTER_SPECULAR_LIGHTING_DISTANT:
+-        case FILTER_SPECULAR_LIGHTING_DISTANT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_SPECULAR_LIGHTING_DISTANT) || wr_switch_2 == (FILTER_SPECULAR_LIGHTING_DISTANT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_SPECULAR_LIGHTING_POINT:
+-        case FILTER_SPECULAR_LIGHTING_POINT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_SPECULAR_LIGHTING_POINT) || wr_switch_2 == (FILTER_SPECULAR_LIGHTING_POINT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_SPECULAR_LIGHTING_SPOT:
+-        case FILTER_SPECULAR_LIGHTING_SPOT_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_SPECULAR_LIGHTING_SPOT) || wr_switch_2 == (FILTER_SPECULAR_LIGHTING_SPOT_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_TILE:
+-        case FILTER_TILE_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_TILE) || wr_switch_2 == (FILTER_TILE_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        case FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_NO_STITCHING:
+-        case FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_NO_STITCHING_CONVERTSRGB:
+-        case FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_STITCHING:
+-        case FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_STITCHING_CONVERTSRGB:
+-        case FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_NO_STITCHING:
+-        case FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_NO_STITCHING_CONVERTSRGB:
+-        case FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_STITCHING:
+-        case FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_STITCHING_CONVERTSRGB:
++        } else if (wr_switch_2 == (FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_NO_STITCHING) || wr_switch_2 == (FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_NO_STITCHING_CONVERTSRGB) || wr_switch_2 == (FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_STITCHING) || wr_switch_2 == (FILTER_TURBULENCE_WITH_FRACTAL_NOISE_WITH_STITCHING_CONVERTSRGB) || wr_switch_2 == (FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_NO_STITCHING) || wr_switch_2 == (FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_NO_STITCHING_CONVERTSRGB) || wr_switch_2 == (FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_STITCHING) || wr_switch_2 == (FILTER_TURBULENCE_WITH_TURBULENCE_NOISE_WITH_STITCHING_CONVERTSRGB)) {
+             // TODO
+-            break;
+-        default:
+-            break;
++        } else {
++        }
+     }
+ 
+     gl_Position = uTransform * vec4(pos, 0.0, 1.0);
+@@ -587,7 +490,7 @@ void main(void) {
+         Rs = sampleInUvRect(sColor0, vInput1Uv, vInput1UvRect);
+         Ns.rgb = Rs.rgb * (1.0 / max(0.000001, Rs.a));
+         Ns.a = Rs.a;
+-        if ((vFilterKind & FILTER_BITFLAGS_CONVERTSRGB) != 0) {
++        if (WR_HAS_FLAG(vFilterKind, FILTER_BITFLAGS_CONVERTSRGB)) {
+             Ns.rgb = SrgbToLinear(Ns.rgb);
+             Rs.rgb = Ns.rgb * Rs.a;
+         }
+@@ -596,7 +499,7 @@ void main(void) {
+         Rb = sampleInUvRect(sColor1, vInput2Uv, vInput2UvRect);
+         Nb.rgb = Rb.rgb * (1.0 / max(0.000001, Rb.a));
+         Nb.a = Rb.a;
+-        if ((vFilterKind & FILTER_BITFLAGS_CONVERTSRGB) != 0) {
++        if (WR_HAS_FLAG(vFilterKind, FILTER_BITFLAGS_CONVERTSRGB)) {
+             Nb.rgb = SrgbToLinear(Nb.rgb);
+             Rb.rgb = Nb.rgb * Rb.a;
+         }
+@@ -761,7 +664,7 @@ void main(void) {
+         // TODO
+     }
+ 
+-    if ((vFilterKind & FILTER_BITFLAGS_CONVERTSRGB) != 0) {
++    if (WR_HAS_FLAG(vFilterKind, FILTER_BITFLAGS_CONVERTSRGB)) {
+         // convert back to sRGB in unmultiplied color space
+         result.rgb = LinearToSrgb(result.rgb * (1.0 / max(0.000001, result.a))) * result.a;
+     }
+diff --git a/gfx/wr/webrender/res/dithering.glsl b/gfx/wr/webrender/res/dithering.glsl
+index 3b797baca292..c3663eec9e8e 100644
+--- a/gfx/wr/webrender/res/dithering.glsl
++++ b/gfx/wr/webrender/res/dithering.glsl
+@@ -12,7 +12,7 @@ uniform sampler2D sDither;
+ vec4 dither(vec4 color) {
+     const int matrix_mask = 7;
+ 
+-    ivec2 pos = ivec2(gl_FragCoord.xy) & ivec2(matrix_mask);
++    ivec2 pos = ivec2(WR_BITS(int(gl_FragCoord.x), 0, 3), WR_BITS(int(gl_FragCoord.y), 0, 3));
+     float noise_normalized = texelFetch(sDither, pos, 0).r * 255.0 / 64.0;
+     // Center the range around zero and scale it down by some amount to
+     // avoid hardware-specific rounding differences.
+diff --git a/gfx/wr/webrender/res/gpu_buffer.glsl b/gfx/wr/webrender/res/gpu_buffer.glsl
+index b6f55a2c02f4..cf8c38bc7fc2 100644
+--- a/gfx/wr/webrender/res/gpu_buffer.glsl
++++ b/gfx/wr/webrender/res/gpu_buffer.glsl
+@@ -6,10 +6,11 @@ uniform HIGHP_SAMPLER_FLOAT sampler2D sGpuBufferF;
+ uniform HIGHP_SAMPLER_FLOAT isampler2D sGpuBufferI;
+ 
+ ivec2 get_gpu_buffer_uv(HIGHP_FS_ADDRESS int address) {
+-    return ivec2(uint(address) % WR_MAX_VERTEX_TEXTURE_WIDTH,
+-                 uint(address) / WR_MAX_VERTEX_TEXTURE_WIDTH);
++    return ivec2(WR_MOD(address, int(WR_MAX_VERTEX_TEXTURE_WIDTH)),
++                 address / int(WR_MAX_VERTEX_TEXTURE_WIDTH));
+ }
+ 
++#if __VERSION__ != 100
+ vec4[2] fetch_from_gpu_buffer_2f_direct(ivec2 uv) {
+     return vec4[2](
+         TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(0, 0)),
+@@ -44,11 +45,14 @@ vec4[5] fetch_from_gpu_buffer_5f_direct(ivec2 uv) {
+     );
+ }
+ 
++#endif
++
+ vec4 fetch_from_gpu_buffer_1f(HIGHP_FS_ADDRESS int address) {
+     ivec2 uv = get_gpu_buffer_uv(address);
+     return texelFetch(sGpuBufferF, uv, 0);
+ }
+ 
++#if __VERSION__ != 100
+ vec4[2] fetch_from_gpu_buffer_2f(HIGHP_FS_ADDRESS int address) {
+     ivec2 uv = get_gpu_buffer_uv(address);
+     return fetch_from_gpu_buffer_2f_direct(uv);
+@@ -69,6 +73,8 @@ vec4[5] fetch_from_gpu_buffer_5f(HIGHP_FS_ADDRESS int address) {
+     return fetch_from_gpu_buffer_5f_direct(uv);
+ }
+ 
++#endif
++
+ vec4 fetch_from_gpu_buffer_1f_direct(ivec2 uv) {
+     return texelFetch(sGpuBufferF, uv, 0);
+ }
+@@ -77,3 +83,45 @@ ivec4 fetch_from_gpu_buffer_1i(HIGHP_FS_ADDRESS int address) {
+     ivec2 uv = get_gpu_buffer_uv(address);
+     return texelFetch(sGpuBufferI, uv, 0);
+ }
++
++#if __VERSION__ == 100
++void wr_gpu_buffer_fetch2(ivec2 uv, out vec4 r[2]) {
++    r[0] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(0, 0));
++    r[1] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(1, 0));
++}
++#define WR_GPU_BUFFER_FETCH_2(name, address) vec4 name[2]; wr_gpu_buffer_fetch2(get_gpu_buffer_uv(address), name)
++#define WR_GPU_BUFFER_FETCH_DIRECT_2(name, uv) vec4 name[2]; wr_gpu_buffer_fetch2(uv, name)
++void wr_gpu_buffer_fetch3(ivec2 uv, out vec4 r[3]) {
++    r[0] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(0, 0));
++    r[1] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(1, 0));
++    r[2] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(2, 0));
++}
++#define WR_GPU_BUFFER_FETCH_3(name, address) vec4 name[3]; wr_gpu_buffer_fetch3(get_gpu_buffer_uv(address), name)
++#define WR_GPU_BUFFER_FETCH_DIRECT_3(name, uv) vec4 name[3]; wr_gpu_buffer_fetch3(uv, name)
++void wr_gpu_buffer_fetch4(ivec2 uv, out vec4 r[4]) {
++    r[0] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(0, 0));
++    r[1] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(1, 0));
++    r[2] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(2, 0));
++    r[3] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(3, 0));
++}
++#define WR_GPU_BUFFER_FETCH_4(name, address) vec4 name[4]; wr_gpu_buffer_fetch4(get_gpu_buffer_uv(address), name)
++#define WR_GPU_BUFFER_FETCH_DIRECT_4(name, uv) vec4 name[4]; wr_gpu_buffer_fetch4(uv, name)
++void wr_gpu_buffer_fetch5(ivec2 uv, out vec4 r[5]) {
++    r[0] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(0, 0));
++    r[1] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(1, 0));
++    r[2] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(2, 0));
++    r[3] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(3, 0));
++    r[4] = TEXEL_FETCH(sGpuBufferF, uv, 0, ivec2(4, 0));
++}
++#define WR_GPU_BUFFER_FETCH_5(name, address) vec4 name[5]; wr_gpu_buffer_fetch5(get_gpu_buffer_uv(address), name)
++#define WR_GPU_BUFFER_FETCH_DIRECT_5(name, uv) vec4 name[5]; wr_gpu_buffer_fetch5(uv, name)
++#else
++#define WR_GPU_BUFFER_FETCH_2(name, address) vec4 name[2] = fetch_from_gpu_buffer_2f(address)
++#define WR_GPU_BUFFER_FETCH_DIRECT_2(name, uv) vec4 name[2] = fetch_from_gpu_buffer_2f_direct(uv)
++#define WR_GPU_BUFFER_FETCH_3(name, address) vec4 name[3] = fetch_from_gpu_buffer_3f(address)
++#define WR_GPU_BUFFER_FETCH_DIRECT_3(name, uv) vec4 name[3] = fetch_from_gpu_buffer_3f_direct(uv)
++#define WR_GPU_BUFFER_FETCH_4(name, address) vec4 name[4] = fetch_from_gpu_buffer_4f(address)
++#define WR_GPU_BUFFER_FETCH_DIRECT_4(name, uv) vec4 name[4] = fetch_from_gpu_buffer_4f_direct(uv)
++#define WR_GPU_BUFFER_FETCH_5(name, address) vec4 name[5] = fetch_from_gpu_buffer_5f(address)
++#define WR_GPU_BUFFER_FETCH_DIRECT_5(name, uv) vec4 name[5] = fetch_from_gpu_buffer_5f_direct(uv)
++#endif
+diff --git a/gfx/wr/webrender/res/gradient.glsl b/gfx/wr/webrender/res/gradient.glsl
+index 8733185fc4b6..8a8fac56b799 100644
+--- a/gfx/wr/webrender/res/gradient.glsl
++++ b/gfx/wr/webrender/res/gradient.glsl
+@@ -40,7 +40,7 @@ vec4 sample_gradient(float offset) {
+     float entry_fract = x - entry_index;
+ 
+     // Fetch the start and end color. There is a [start, end] color per entry.
+-    vec4 texels[2] = fetch_from_gpu_buffer_2f(v_gradient_address.x + 2 * int(entry_index));
++    WR_GPU_BUFFER_FETCH_2(texels, v_gradient_address.x + 2 * int(entry_index));
+ 
+     // Finally interpolate and apply dithering
+     return dither(texels[0] + texels[1] * entry_fract);
+diff --git a/gfx/wr/webrender/res/gradient_shared.glsl b/gfx/wr/webrender/res/gradient_shared.glsl
+index a3cc042ca6ef..a0b52a05def6 100644
+--- a/gfx/wr/webrender/res/gradient_shared.glsl
++++ b/gfx/wr/webrender/res/gradient_shared.glsl
+@@ -26,7 +26,7 @@ void write_gradient_vertex(
+     int extend_mode,
+     vec2 stretch_size
+ ) {
+-    if ((brush_flags & BRUSH_FLAG_SEGMENT_RELATIVE) != 0) {
++    if (WR_HAS_FLAG(brush_flags, BRUSH_FLAG_SEGMENT_RELATIVE)) {
+         v_pos = (vi.local_pos - segment_rect.p0) / rect_size(segment_rect);
+         v_pos = v_pos * (texel_rect.zw - texel_rect.xy) + texel_rect.xy;
+         v_pos = v_pos * rect_size(local_rect);
+diff --git a/gfx/wr/webrender/res/image_source.glsl b/gfx/wr/webrender/res/image_source.glsl
+index c679057f4a74..197d888a9a10 100644
+--- a/gfx/wr/webrender/res/image_source.glsl
++++ b/gfx/wr/webrender/res/image_source.glsl
+@@ -17,13 +17,13 @@ struct ImageSource {
+ 
+ ImageSource fetch_image_source(int address) {
+     //Note: number of blocks has to match `renderer::BLOCKS_PER_UV_RECT`
+-    vec4 data[2] = fetch_from_gpu_buffer_2f(address);
++    WR_GPU_BUFFER_FETCH_2(data, address);
+     RectWithEndpoint uv_rect = RectWithEndpoint(data[0].xy, data[0].zw);
+     return ImageSource(uv_rect, data[1]);
+ }
+ 
+ ImageSource fetch_image_source_direct(ivec2 address) {
+-    vec4 data[2] = fetch_from_gpu_buffer_2f_direct(address);
++    WR_GPU_BUFFER_FETCH_DIRECT_2(data, address);
+     RectWithEndpoint uv_rect = RectWithEndpoint(data[0].xy, data[0].zw);
+     return ImageSource(uv_rect, data[1]);
+ }
+@@ -39,7 +39,7 @@ struct ImageSourceExtra {
+ };
+ 
+ ImageSourceExtra fetch_image_source_extra(int address) {
+-    vec4 data[4] = fetch_from_gpu_buffer_4f(address + VECS_PER_IMAGE_RESOURCE);
++    WR_GPU_BUFFER_FETCH_4(data, address + VECS_PER_IMAGE_RESOURCE);
+     return ImageSourceExtra(
+         data[0],
+         data[1],
+diff --git a/gfx/wr/webrender/res/prim_shared.glsl b/gfx/wr/webrender/res/prim_shared.glsl
+index 80c81b053325..6e62a9c9adf6 100644
+--- a/gfx/wr/webrender/res/prim_shared.glsl
++++ b/gfx/wr/webrender/res/prim_shared.glsl
+@@ -37,8 +37,16 @@ uniform HIGHP_SAMPLER_FLOAT isampler2D sPrimitiveHeadersI;
+ // Instanced attributes
+ PER_INSTANCE attribute ivec4 aData;
+ 
++#if __VERSION__ == 100
++#define VECS_PER_PRIM_HEADER_F 2
++#else
+ #define VECS_PER_PRIM_HEADER_F 2U
++#endif
++#if __VERSION__ == 100
++#define VECS_PER_PRIM_HEADER_I 2
++#else
+ #define VECS_PER_PRIM_HEADER_I 2U
++#endif
+ 
+ struct Instance
+ {
+@@ -55,10 +63,10 @@ Instance decode_instance_attributes() {
+ 
+     instance.prim_header_address = aData.x;
+     instance.clip_address = aData.y;
+-    instance.segment_index = aData.z & 0xffff;
+-    instance.flags = aData.z >> 16;
+-    instance.resource_address = aData.w & 0xffffff;
+-    instance.brush_kind = aData.w >> 24;
++    instance.segment_index = WR_BITS(aData.z, 0, 16);
++    instance.flags = WR_SHR(aData.z, 16);
++    instance.resource_address = WR_BITS(aData.w, 0, 24);
++    instance.brush_kind = WR_SHR(aData.w, 24);
+ 
+     return instance;
+ }
+@@ -153,7 +161,7 @@ RectWithEndpoint clip_and_init_antialiasing(RectWithEndpoint segment_rect,
+     // We must perform the bitwise-and for each component individually, as a
+     // vector bitwise-and followed by conversion to bvec4 causes shader
+     // compilation crashes on some Adreno devices. See bug 1715746.
+-    bvec4 clip_edge_mask = bvec4(bool(edge_flags & 1), bool(edge_flags & 2), bool(edge_flags & 4), bool(edge_flags & 8));
++    bvec4 clip_edge_mask = bvec4(WR_HAS_FLAG(edge_flags, 1), WR_HAS_FLAG(edge_flags, 2), WR_HAS_FLAG(edge_flags, 4), WR_HAS_FLAG(edge_flags, 8));
+     rectangle_aa_vertex(mix(
+         vec4(vec2(-1e16), vec2(1e16)),
+         vec4(segment_rect.p0, segment_rect.p1),
+diff --git a/gfx/wr/webrender/res/ps_quad.glsl b/gfx/wr/webrender/res/ps_quad.glsl
+index 267ff58fd45c..5eea2a7fee6c 100644
+--- a/gfx/wr/webrender/res/ps_quad.glsl
++++ b/gfx/wr/webrender/res/ps_quad.glsl
+@@ -108,7 +108,7 @@ struct QuadPrimitive {
+ QuadSegment fetch_segment(int base, int index) {
+     QuadSegment seg;
+ 
+-    vec4 texels[2] = fetch_from_gpu_buffer_2f(base + 5 + index * 2);
++    WR_GPU_BUFFER_FETCH_2(texels, base + 5 + index * 2);
+ 
+     seg.rect = RectWithEndpoint(texels[0].xy, texels[0].zw);
+     seg.uv_rect = RectWithEndpoint(texels[1].xy, texels[1].zw);
+@@ -119,7 +119,7 @@ QuadSegment fetch_segment(int base, int index) {
+ QuadPrimitive fetch_primitive(int index) {
+     QuadPrimitive prim;
+ 
+-    vec4 texels[5] = fetch_from_gpu_buffer_5f(index);
++    WR_GPU_BUFFER_FETCH_5(texels, index);
+ 
+     prim.bounds = RectWithEndpoint(texels[0].xy, texels[0].zw);
+     prim.clip = RectWithEndpoint(texels[1].xy, texels[1].zw);
+@@ -171,10 +171,10 @@ QuadInstance decode_instance() {
+ 
+         aData.y,
+ 
+-        (aData.z >> 24) & 0xff,
+-        (aData.z >> 16) & 0xff,
+-        (aData.z >>  8) & 0xff,
+-        (aData.z >>  0) & 0xff,
++        WR_BITS(aData.z, 24, 8),
++        WR_BITS(aData.z, 16, 8),
++        WR_BITS(aData.z, 8, 8),
++        WR_BITS(aData.z, 0, 8),
+ 
+         aData.w
+     );
+@@ -201,7 +201,7 @@ VertexInfo write_vertex(vec2 local_pos,
+     vec2 device_pos = transformed.xy;
+     float w = transformed.w;
+ 
+-    if ((quad_flags & QF_APPLY_DEVICE_CLIP) != 0) {
++    if (WR_HAS_FLAG(quad_flags, QF_APPLY_DEVICE_CLIP)) {
+         RectWithEndpoint device_clip_rect = RectWithEndpoint(
+             content_origin,
+             content_origin + task_rect.p1 - task_rect.p0
+@@ -266,13 +266,14 @@ PrimitiveInfo quad_primive_info(void) {
+     local_coverage_rect.p1 = min(local_coverage_rect.p1, prim.clip.p1);
+     local_coverage_rect.p1 = max(local_coverage_rect.p0, local_coverage_rect.p1);
+ 
+-    float aa_left   = (qi.edge_flags & EDGE_AA_LEFT)   != 0 ? 1.0 : 0.0;
+-    float aa_top    = (qi.edge_flags & EDGE_AA_TOP)    != 0 ? 1.0 : 0.0;
+-    float aa_right  = (qi.edge_flags & EDGE_AA_RIGHT)  != 0 ? 1.0 : 0.0;
+-    float aa_bottom = (qi.edge_flags & EDGE_AA_BOTTOM) != 0 ? 1.0 : 0.0;
++    float aa_left   = WR_HAS_FLAG(qi.edge_flags, EDGE_AA_LEFT) ? 1.0 : 0.0;
++    float aa_top    = WR_HAS_FLAG(qi.edge_flags, EDGE_AA_TOP) ? 1.0 : 0.0;
++    float aa_right  = WR_HAS_FLAG(qi.edge_flags, EDGE_AA_RIGHT) ? 1.0 : 0.0;
++    float aa_bottom = WR_HAS_FLAG(qi.edge_flags, EDGE_AA_BOTTOM) ? 1.0 : 0.0;
+ 
+-    switch (qi.part_index) {
+-        case PART_LEFT:
++    {
++        int wr_switch_3 = int(qi.part_index);
++        if (wr_switch_3 == (PART_LEFT)) {
+             local_coverage_rect.p1.x = local_coverage_rect.p0.x + AA_PIXEL_RADIUS;
+ #ifdef SWGL_ANTIALIAS
+             swgl_antiAlias(EDGE_AA_LEFT);
+@@ -281,8 +282,7 @@ PrimitiveInfo quad_primive_info(void) {
+             local_coverage_rect.p0.y -= aa_top * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.y += aa_bottom * AA_PIXEL_RADIUS;
+ #endif
+-            break;
+-        case PART_TOP:
++        } else if (wr_switch_3 == (PART_TOP)) {
+             local_coverage_rect.p0.x += aa_left * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.x -= aa_right * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.y = local_coverage_rect.p0.y + AA_PIXEL_RADIUS;
+@@ -291,8 +291,7 @@ PrimitiveInfo quad_primive_info(void) {
+ #else
+             local_coverage_rect.p0.y -= AA_PIXEL_RADIUS;
+ #endif
+-            break;
+-        case PART_RIGHT:
++        } else if (wr_switch_3 == (PART_RIGHT)) {
+             local_coverage_rect.p0.x = local_coverage_rect.p1.x - AA_PIXEL_RADIUS;
+ #ifdef SWGL_ANTIALIAS
+             swgl_antiAlias(EDGE_AA_RIGHT);
+@@ -301,8 +300,7 @@ PrimitiveInfo quad_primive_info(void) {
+             local_coverage_rect.p0.y -= aa_top * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.y += aa_bottom * AA_PIXEL_RADIUS;
+ #endif
+-            break;
+-        case PART_BOTTOM:
++        } else if (wr_switch_3 == (PART_BOTTOM)) {
+             local_coverage_rect.p0.x += aa_left * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.x -= aa_right * AA_PIXEL_RADIUS;
+             local_coverage_rect.p0.y = local_coverage_rect.p1.y - AA_PIXEL_RADIUS;
+@@ -311,15 +309,12 @@ PrimitiveInfo quad_primive_info(void) {
+ #else
+             local_coverage_rect.p1.y += AA_PIXEL_RADIUS;
+ #endif
+-            break;
+-        case PART_CENTER:
++        } else if (wr_switch_3 == (PART_CENTER)) {
+             local_coverage_rect.p0.x += aa_left * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.x -= aa_right * AA_PIXEL_RADIUS;
+             local_coverage_rect.p0.y += aa_top * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.y -= aa_bottom * AA_PIXEL_RADIUS;
+-            break;
+-        case PART_ALL:
+-        default:
++        } else {
+ #ifdef SWGL_ANTIALIAS
+             swgl_antiAlias(qi.edge_flags);
+ #else
+@@ -328,7 +323,7 @@ PrimitiveInfo quad_primive_info(void) {
+             local_coverage_rect.p0.y -= aa_top * AA_PIXEL_RADIUS;
+             local_coverage_rect.p1.y += aa_bottom * AA_PIXEL_RADIUS;
+ #endif
+-            break;
++        }
+     }
+ 
+     vec2 local_pos = mix(local_coverage_rect.p0, local_coverage_rect.p1, aPosition);
+@@ -361,7 +356,7 @@ PrimitiveInfo quad_primive_info(void) {
+ // Move the AA distance rect *away* from the primitive for edges that are
+ // not anti-aliased (by an arbitrary amount).
+ float edge_no_aa_offset(int edge, int flags) {
+-    return ((flags & edge) != 0) ? 0.0 : 10.0;
++    return (WR_HAS_FLAG(flags, edge)) ? 0.0 : 10.0;
+ }
+ 
+ void antialiasing_vertex(PrimitiveInfo prim) {
+@@ -397,7 +392,7 @@ void antialiasing_vertex(PrimitiveInfo prim) {
+ void main() {
+     PrimitiveInfo prim = quad_primive_info();
+ 
+-    if ((prim.quad_flags & QF_IS_MASK) != 0) {
++    if (WR_HAS_FLAG(prim.quad_flags, QF_IS_MASK)) {
+         v_flags_is_mask = 1;
+     } else {
+         v_flags_is_mask = 0;
+diff --git a/gfx/wr/webrender/res/ps_quad_gradient.glsl b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+index 007b330c38d2..1752c6c36cfe 100644
+--- a/gfx/wr/webrender/res/ps_quad_gradient.glsl
++++ b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+@@ -102,27 +102,25 @@ void pattern_vertex(PrimitiveInfo info) {
+     int address = info.pattern_input.x;
+     // gradient[0..1] contains linear/radial/conic specific data,
+     // gradient[2] contains the header to interpret gradient stops.
+-    vec4[3] gradient = fetch_from_gpu_buffer_3f(address);
++    WR_GPU_BUFFER_FETCH_3(gradient, address);
+     ivec4 header = decode_gradient_header(address + 2, gradient[2]);
+ 
+-    switch (header.x) {
+-        case GRADIENT_KIND_LINEAR: {
++    {
++        int wr_switch_0 = int(header.x);
++        if (wr_switch_0 == (GRADIENT_KIND_LINEAR)) { {
+             linear_gradient_vertex(info.local_pos, gradient[0]);
+-            break;
+-        }
+-        case GRADIENT_KIND_RADIAL: {
++}
++        } else if (wr_switch_0 == (GRADIENT_KIND_RADIAL)) { {
+             radial_gradient_vertex(info.local_pos, gradient[0], gradient[1]);
+-            break;
+-        }
+-        case GRADIENT_KIND_CONIC: {
++}
++        } else if (wr_switch_0 == (GRADIENT_KIND_CONIC)) { {
+             conic_gradient_vertex(info.local_pos, gradient[0], gradient[1]);
+-            break;
+-        }
+-        default: {
++}
++        } else { {
+             // This should be dead code.
+             v_interpolated_data = vec4(0.0);
+             v_flat_data = vec4(0.0);
+-            break;
++}
+         }
+     }
+ 
+@@ -135,7 +133,7 @@ void pattern_vertex(PrimitiveInfo info) {
+ 
+     if (count == 2) {
+         // Fast path: If we have only two color stops, pass them by varyings.
+-        vec4[2] colors = fetch_from_gpu_buffer_2f(colors_addr);
++        WR_GPU_BUFFER_FETCH_2(colors, colors_addr);
+         v_color0 = colors[0];
+         v_color1 = colors[1];
+     }
+@@ -270,7 +268,7 @@ vec4 sample_gradient_stops_tree(float offset) {
+         index = count - 1;
+     }
+     HIGHP_FS_ADDRESS int color_pair_address = colors_addr + index - 1;
+-    vec4 color_pair[2] = fetch_from_gpu_buffer_2f(color_pair_address);
++    WR_GPU_BUFFER_FETCH_2(color_pair, color_pair_address);
+ 
+     return mix(color_pair[0], color_pair[1], factor);
+ }
+@@ -334,21 +332,19 @@ float conic_gradient_fragment() {
+ vec4 pattern_fragment(vec4 color) {
+ 
+     float offset = 0.0;
+-    switch (v_gradient_header.x) {
+-        case GRADIENT_KIND_LINEAR: {
++    {
++        int wr_switch_1 = int(v_gradient_header.x);
++        if (wr_switch_1 == (GRADIENT_KIND_LINEAR)) { {
+             offset = linear_gradient_fragment();
+-            break;
+-        }
+-        case GRADIENT_KIND_RADIAL: {
++}
++        } else if (wr_switch_1 == (GRADIENT_KIND_RADIAL)) { {
+             offset = radial_gradient_fragment();
+-            break;
+-        }
+-        case GRADIENT_KIND_CONIC: {
++}
++        } else if (wr_switch_1 == (GRADIENT_KIND_CONIC)) { {
+             offset = conic_gradient_fragment();
+-            break;
+-        }
+-        default: {
+-            break;
++}
++        } else { {
++}
+         }
+     }
+ 
+diff --git a/gfx/wr/webrender/res/ps_quad_mask.glsl b/gfx/wr/webrender/res/ps_quad_mask.glsl
+index 2ff73d33d945..c8ba77f0ed44 100644
+--- a/gfx/wr/webrender/res/ps_quad_mask.glsl
++++ b/gfx/wr/webrender/res/ps_quad_mask.glsl
+@@ -53,12 +53,12 @@ Clip fetch_clip(int index) {
+     clip.space = aClipData.z;
+ 
+ #ifdef WR_FEATURE_FAST_PATH
+-    vec4 texels[3] = fetch_from_gpu_buffer_3f(index);
++    WR_GPU_BUFFER_FETCH_3(texels, index);
+     clip.rect = RectWithEndpoint(texels[0].xy, texels[0].zw);
+     clip.radii = texels[1];
+     clip.mode = texels[2].x;
+ #else
+-    vec4 texels[5] = fetch_from_gpu_buffer_5f(index);
++    WR_GPU_BUFFER_FETCH_5(texels, index);
+     clip.rect = RectWithEndpoint(texels[0].xy, texels[0].zw);
+     clip.radii_top = texels[1];
+     clip.radii_bottom = texels[2];
+diff --git a/gfx/wr/webrender/res/ps_split_composite.glsl b/gfx/wr/webrender/res/ps_split_composite.glsl
+index ec35ef481587..f3ca3d89590e 100644
+--- a/gfx/wr/webrender/res/ps_split_composite.glsl
++++ b/gfx/wr/webrender/res/ps_split_composite.glsl
+@@ -21,7 +21,7 @@ struct SplitGeometry {
+ };
+ 
+ SplitGeometry fetch_split_geometry(int address) {
+-    vec4[2] data = fetch_from_gpu_buffer_2f(address);
++    WR_GPU_BUFFER_FETCH_2(data, address);
+ 
+     SplitGeometry geo;
+     geo.local = vec2[4](
+diff --git a/gfx/wr/webrender/res/ps_text_run.glsl b/gfx/wr/webrender/res/ps_text_run.glsl
+index 81c758bde5c2..ef248c6a1925 100644
+--- a/gfx/wr/webrender/res/ps_text_run.glsl
++++ b/gfx/wr/webrender/res/ps_text_run.glsl
+@@ -20,7 +20,11 @@ varying highp vec4 v_uv_clip;
+ #ifdef WR_VERTEX_SHADER
+ 
+ #define VECS_PER_TEXT_RUN           1
++#if __VERSION__ == 100
++#define GLYPHS_PER_GPU_BLOCK 2
++#else
+ #define GLYPHS_PER_GPU_BLOCK        2U
++#endif
+ 
+ #ifdef WR_FEATURE_GLYPH_TRANSFORM
+ RectWithEndpoint transform_rect(RectWithEndpoint rect, mat2 transform) {
+@@ -44,11 +48,11 @@ Glyph fetch_glyph(int specific_prim_address,
+     // Two glyphs are packed in each texel in the GPU cache.
+     int glyph_address = specific_prim_address +
+                         VECS_PER_TEXT_RUN +
+-                        int(uint(glyph_index) / GLYPHS_PER_GPU_BLOCK);
++                        glyph_index / int(GLYPHS_PER_GPU_BLOCK);
+     vec4 data = fetch_from_gpu_buffer_1f(glyph_address);
+     // Select XY or ZW based on glyph index.
+     vec2 glyph = mix(data.xy, data.zw,
+-                     bvec2(uint(glyph_index) % GLYPHS_PER_GPU_BLOCK == 1U));
++                     bvec2(WR_MOD(glyph_index, int(GLYPHS_PER_GPU_BLOCK)) == 1));
+ 
+     return Glyph(glyph);
+ }
+@@ -60,7 +64,7 @@ struct GlyphResource {
+ };
+ 
+ GlyphResource fetch_glyph_resource(int address) {
+-    vec4 data[2] = fetch_from_gpu_buffer_2f(address);
++    WR_GPU_BUFFER_FETCH_2(data, address);
+     return GlyphResource(data[0], data[1].xy, data[1].z);
+ }
+ 
+@@ -78,18 +82,19 @@ vec2 get_snap_bias(int subpx_dir) {
+     // accounted for while rasterizing the glyph. However, we
+     // must still round with a subpixel bias rather than rounding
+     // to the nearest whole pixel, depending on subpixel direciton.
+-    switch (subpx_dir) {
+-        case SUBPX_DIR_NONE:
+-        default:
+-            return vec2(0.5);
+-        case SUBPX_DIR_HORIZONTAL:
++    {
++        int wr_switch_10 = int(subpx_dir);
++        if (wr_switch_10 == (SUBPX_DIR_HORIZONTAL)) {
+             // Glyphs positioned [-0.125, 0.125] get a
+             // subpx position of zero. So include that
+             // offset in the glyph position to ensure
+             // we round to the correct whole position.
+             return vec2(0.125, 0.5);
+-        case SUBPX_DIR_VERTICAL:
++        } else if (wr_switch_10 == (SUBPX_DIR_VERTICAL)) {
+             return vec2(0.5, 0.125);
++        } else {
++            return vec2(0.5);
++        }
+     }
+ }
+ 
+@@ -101,11 +106,11 @@ void main() {
+     PictureTask task = fetch_picture_task(ph.picture_task_address);
+ 
+     int glyph_index = instance.segment_index;
+-    int color_mode = instance.flags & 0xF;
+-    int subpx_offset_x = (instance.flags >> 4) & 0x3;
+-    int subpx_offset_y = (instance.flags >> 6) & 0x3;
+-    int subpx_dir = (instance.flags >> 8) & 0x3;
+-    int is_packed_glyph = (instance.flags >> 10) & 0x1;
++    int color_mode = WR_BITS(instance.flags, 0, 4);
++    int subpx_offset_x = WR_BITS(instance.flags, 4, 2);
++    int subpx_offset_y = WR_BITS(instance.flags, 6, 2);
++    int subpx_dir = WR_BITS(instance.flags, 8, 2);
++    int is_packed_glyph = WR_BITS(instance.flags, 10, 1);
+ 
+     // Note that the reference frame relative offset is stored in the prim local
+     // rect size during batching, instead of the actual size of the primitive.
+@@ -240,12 +245,12 @@ void main() {
+ 
+     write_clip(vi.world_pos, clip_area, task);
+ 
+-    switch (color_mode) {
+-        case COLOR_MODE_ALPHA:
++    {
++        int wr_switch_11 = int(color_mode);
++        if (wr_switch_11 == (COLOR_MODE_ALPHA)) {
+             v_mask_swizzle = vec3(0.0, 1.0, 1.0);
+             v_color = text.color;
+-            break;
+-        case COLOR_MODE_BITMAP_SHADOW:
++        } else if (wr_switch_11 == (COLOR_MODE_BITMAP_SHADOW)) {
+             #ifdef SWGL_BLEND
+                 swgl_blendDropShadow(text.color);
+                 v_mask_swizzle = vec3(1.0, 0.0, 0.0);
+@@ -254,12 +259,10 @@ void main() {
+                 v_mask_swizzle = vec3(0.0, 1.0, 0.0);
+                 v_color = text.color;
+             #endif
+-            break;
+-        case COLOR_MODE_COLOR_BITMAP:
++        } else if (wr_switch_11 == (COLOR_MODE_COLOR_BITMAP)) {
+             v_mask_swizzle = vec3(1.0, 0.0, 0.0);
+             v_color = vec4(text.color.a);
+-            break;
+-        case COLOR_MODE_SUBPX_DUAL_SOURCE:
++        } else if (wr_switch_11 == (COLOR_MODE_SUBPX_DUAL_SOURCE)) {
+             #ifdef SWGL_BLEND
+                 swgl_blendSubpixelText(text.color);
+                 v_mask_swizzle = vec3(1.0, 0.0, 0.0);
+@@ -268,10 +271,10 @@ void main() {
+                 v_mask_swizzle = vec3(text.color.a, 0.0, 0.0);
+                 v_color = text.color;
+             #endif
+-            break;
+-        default:
++        } else {
+             v_mask_swizzle = vec3(0.0, 0.0, 0.0);
+             v_color = vec4(1.0);
++        }
+     }
+ 
+     vec2 texture_size = vec2(TEX_SIZE(sColor0));
+diff --git a/gfx/wr/webrender/res/render_task.glsl b/gfx/wr/webrender/res/render_task.glsl
+index e5d0c298cdaf..08cae9b186c9 100644
+--- a/gfx/wr/webrender/res/render_task.glsl
++++ b/gfx/wr/webrender/res/render_task.glsl
+@@ -4,7 +4,11 @@
+ 
+ 
+ #ifdef WR_VERTEX_SHADER
++#if __VERSION__ == 100
++#define VECS_PER_RENDER_TASK 2
++#else
+ #define VECS_PER_RENDER_TASK        2U
++#endif
+ 
+ uniform HIGHP_SAMPLER_FLOAT sampler2D sRenderTasks;
+ 
+diff --git a/gfx/wr/webrender/res/shared.glsl b/gfx/wr/webrender/res/shared.glsl
+index 933287443f0f..0bc449fb0741 100644
+--- a/gfx/wr/webrender/res/shared.glsl
++++ b/gfx/wr/webrender/res/shared.glsl
+@@ -74,7 +74,11 @@ uniform bool u_mali_workaround_dummy;
+     // https://github.com/servo/webrender/pull/623
+     // https://github.com/servo/servo/issues/13953
+     // Do the division with unsigned ints because that's more efficient with D3D
+-    #define get_fetch_uv(i, vpi)  ivec2(int(vpi * (uint(i) % (WR_MAX_VERTEX_TEXTURE_WIDTH/vpi))), int(uint(i) / (WR_MAX_VERTEX_TEXTURE_WIDTH/vpi)))
++    #if __VERSION__ == 100
++        #define get_fetch_uv(i, vpi)  ivec2(vpi * WR_MOD(i, WR_MAX_VERTEX_TEXTURE_WIDTH/vpi), (i) / (WR_MAX_VERTEX_TEXTURE_WIDTH/vpi))
++    #else
++        #define get_fetch_uv(i, vpi)  ivec2(int(vpi * (uint(i) % (WR_MAX_VERTEX_TEXTURE_WIDTH/vpi))), int(uint(i) / (WR_MAX_VERTEX_TEXTURE_WIDTH/vpi)))
++    #endif
+ #endif
+ 
+ //======================================================================================
+@@ -113,8 +117,9 @@ uniform bool u_mali_workaround_dummy;
+     }
+ 
+ // fwidth is not defined in ESSL 1, but that's okay because we don't need
+-// it for any ESSL 1 shader variants.
+-#if __VERSION__ != 100
++// it for any ESSL 1 shader variants. On OpenGL ES 2.0 devices it comes from
++// GL_OES_standard_derivatives.
++#if __VERSION__ != 100 || defined(WR_GLES2)
+     /// Find the appropriate half range to apply the AA approximation over.
+     /// This range represents a coefficient to go from one CSS pixel to half a device pixel.
+     vec2 compute_aa_range_xy(vec2 position) {
+diff --git a/gfx/wr/webrender/res/transform.glsl b/gfx/wr/webrender/res/transform.glsl
+index 8253437805b1..0b6c559b4410 100644
+--- a/gfx/wr/webrender/res/transform.glsl
++++ b/gfx/wr/webrender/res/transform.glsl
+@@ -6,7 +6,11 @@ flat varying highp vec4 vTransformBounds;
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
++#if __VERSION__ == 100
++#define VECS_PER_TRANSFORM 8
++#else
+ #define VECS_PER_TRANSFORM   8U
++#endif
+ uniform HIGHP_SAMPLER_FLOAT sampler2D sTransformPalette;
+ 
+ // See GpuTransformId.
+@@ -25,8 +29,8 @@ struct Transform {
+ Transform fetch_transform(int id) {
+     Transform transform;
+ 
+-    transform.is_axis_aligned = (id >> 23) == 0;
+-    int index = id & TRANSFORM_INDEX_MASK;
++    transform.is_axis_aligned = WR_SHR(id, 23) == 0;
++    int index = WR_BITS(id, 0, 22);
+ 
+     // Create a UV base coord for each 8 texels.
+     // This is required because trying to use an offset
+diff --git a/gfx/wr/webrender/res/yuv.glsl b/gfx/wr/webrender/res/yuv.glsl
+index 9fcf9f7b83c2..440fe05a843d 100644
+--- a/gfx/wr/webrender/res/yuv.glsl
++++ b/gfx/wr/webrender/res/yuv.glsl
+@@ -79,13 +79,13 @@ struct YuvColorMatrixInfo {
+ // -
+ 
+ vec4 yuv_channel_zero_one_identity(int bit_depth, float channel_max) {
+-    float all_ones_normalized = float((1 << bit_depth) - 1) / channel_max;
++    float all_ones_normalized = float(WR_SHL(1, bit_depth) - 1) / channel_max;
+     return vec4(0.0, 0.0, all_ones_normalized, all_ones_normalized);
+ }
+ 
+ vec4 yuv_channel_zero_one_narrow_range(int bit_depth, float channel_max) {
+     // Note: 512/1023 != 128/255
+-    ivec4 zero_one_ints = ivec4(16, 128, 235, 240) << (bit_depth - 8);
++    ivec4 zero_one_ints = WR_SHL(ivec4(16, 128, 235, 240), bit_depth - 8);
+     return vec4(zero_one_ints) / channel_max;
+ }
+ 
+@@ -100,7 +100,7 @@ YuvColorSamplingInfo get_yuv_color_info(YuvPrimitive prim) {
+     if (prim.channel_bit_depth > 8) {
+         if (prim.yuv_format == YUV_FORMAT_P010) {
+             // This is an MSB format.
+-            channel_max = float((1 << prim.channel_bit_depth) - 1);
++            channel_max = float(WR_SHL(1, prim.channel_bit_depth) - 1);
+         } else {
+             // For >8bpc, we get the low bits, not the high bits:
+             // 10bpc(1.0): 0b0000_0011_1111_1111
+@@ -186,8 +186,9 @@ vec4 sample_yuv(
+ ) {
+     YUV_PRECISION vec3 ycbcr_sample;
+ 
+-    switch (format) {
+-        case YUV_FORMAT_PLANAR:
++    {
++        int wr_switch_2 = int(format);
++        if (wr_switch_2 == (YUV_FORMAT_PLANAR)) {
+             {
+                 // The yuv_planar format should have this third texture coordinate.
+                 vec2 uv_y = clamp(in_uv_y, uv_bounds_y.xy, uv_bounds_y.zw);
+@@ -197,20 +198,14 @@ vec4 sample_yuv(
+                 ycbcr_sample.y = TEX_SAMPLE(sColor1, uv_u).r;
+                 ycbcr_sample.z = TEX_SAMPLE(sColor2, uv_v).r;
+             }
+-            break;
+-
+-        case YUV_FORMAT_NV12:
+-        case YUV_FORMAT_P010:
+-        case YUV_FORMAT_NV16:
++        } else if (wr_switch_2 == (YUV_FORMAT_NV12) || wr_switch_2 == (YUV_FORMAT_P010) || wr_switch_2 == (YUV_FORMAT_NV16)) {
+             {
+                 vec2 uv_y = clamp(in_uv_y, uv_bounds_y.xy, uv_bounds_y.zw);
+                 vec2 uv_uv = clamp(in_uv_u, uv_bounds_u.xy, uv_bounds_u.zw);
+                 ycbcr_sample.x = TEX_SAMPLE(sColor0, uv_y).r;
+                 ycbcr_sample.yz = TEX_SAMPLE(sColor1, uv_uv).rg;
+             }
+-            break;
+-
+-        case YUV_FORMAT_INTERLEAVED:
++        } else if (wr_switch_2 == (YUV_FORMAT_INTERLEAVED)) {
+             {
+                 // "The Y, Cb and Cr color channels within the 422 data are mapped into
+                 // the existing green, blue and red color channels."
+@@ -218,11 +213,9 @@ vec4 sample_yuv(
+                 vec2 uv_y = clamp(in_uv_y, uv_bounds_y.xy, uv_bounds_y.zw);
+                 ycbcr_sample = TEX_SAMPLE(sColor0, uv_y).gbr;
+             }
+-            break;
+-
+-        default:
++        } else {
+             ycbcr_sample = vec3(0.0);
+-            break;
++        }
+     }
+     //if (true) return vec4(ycbcr_sample, 1.0);
+ 
+-- 
+2.56.0
+

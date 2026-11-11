@@ -1,0 +1,27 @@
+From 95d72ba1f90024678df0e52d69eeb4f103b89cdb Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sun, 23 Aug 2026 10:55:03 +0000
+Subject: [PATCH 137/156] SearchService: default the app engine list in
+ #loadEnginesFromSettings (one caller omits it, which throws when settings
+ already hold engines)
+
+---
+ toolkit/components/search/SearchService.sys.mjs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/toolkit/components/search/SearchService.sys.mjs b/toolkit/components/search/SearchService.sys.mjs
+index 5122f0d88dc9..3d1eb7b55525 100644
+--- a/toolkit/components/search/SearchService.sys.mjs
++++ b/toolkit/components/search/SearchService.sys.mjs
+@@ -2652,7 +2652,7 @@ export const SearchService = new (class SearchService {
+    * @returns {Promise<boolean>}
+    *   Returns true if the default engine was changed.
+    */
+-  async #loadEnginesFromSettings(settings, engines) {
++  async #loadEnginesFromSettings(settings, engines = []) {
+     if (!settings.engines) {
+       return false;
+     }
+-- 
+2.56.0
+

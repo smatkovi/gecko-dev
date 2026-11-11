@@ -1,0 +1,32 @@
+From d3b3713e28078127d6c5b2e1463707799ada81d2 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 08:20:31 +0000
+Subject: [PATCH 122/156] transplant-fix: SafeArea part 5 - add the missing FFI
+ Servo_StyleSet_GetSafeAreaInsetUsage to glue.rs (reads
+ Device::safe_area_inset_usage)
+
+---
+ servo/ports/geckolib/glue.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/servo/ports/geckolib/glue.rs b/servo/ports/geckolib/glue.rs
+index bd4ac9459026..07e0d734495c 100644
+--- a/servo/ports/geckolib/glue.rs
++++ b/servo/ports/geckolib/glue.rs
+@@ -2074,6 +2074,13 @@ pub extern "C" fn Servo_StyleSet_UsesFontMetrics(raw_data: &PerDocumentStyleData
+     doc_data.borrow().stylist.device().used_font_metrics()
+ }
+ 
++#[no_mangle]
++pub extern "C" fn Servo_StyleSet_GetSafeAreaInsetUsage(raw_data: &PerDocumentStyleData) -> u8 {
++    // EmbedLite: env(safe-area-inset-*) usage recorded by the device during
++    // variable substitution, read back after each traversal.
++    raw_data.borrow().stylist.device().safe_area_inset_usage()
++}
++
+ #[no_mangle]
+ pub extern "C" fn Servo_StyleSet_UsesRootFontMetrics(raw_data: &PerDocumentStyleData) -> bool {
+     let doc_data = raw_data;
+-- 
+2.56.0
+

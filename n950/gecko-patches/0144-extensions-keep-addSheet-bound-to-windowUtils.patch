@@ -1,0 +1,31 @@
+From b6c56b52f65c4b9e6cd7c259bd7d5e00e3ef2cb0 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Wed, 26 Aug 2026 16:15:32 +0000
+Subject: [PATCH 144/156] extensions: keep addSheet bound to windowUtils
+
+runSafeSyncWithoutClone was handed the bare method, which loses `this` and makes
+the XPCOM call fail with NS_ERROR_ILLEGAL_VALUE. tabs.insertCSS and
+scripting.insertCSS reached the content process and then dropped the stylesheet
+on the floor.
+---
+ toolkit/components/extensions/ExtensionContent.sys.mjs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/toolkit/components/extensions/ExtensionContent.sys.mjs b/toolkit/components/extensions/ExtensionContent.sys.mjs
+index 770d5eefe855..d392eee87bdd 100644
+--- a/toolkit/components/extensions/ExtensionContent.sys.mjs
++++ b/toolkit/components/extensions/ExtensionContent.sys.mjs
+@@ -667,7 +667,9 @@ class Script {
+           ? windowUtils.USER_SHEET
+           : windowUtils.AUTHOR_SHEET;
+       for (const sheet of sheets) {
+-        runSafeSyncWithoutClone(windowUtils.addSheet, sheet, type);
++        // addSheet has to keep its binding to windowUtils; passing the bare
++        // method loses `this` and the XPCOM call fails with NS_ERROR_ILLEGAL_VALUE.
++        runSafeSyncWithoutClone(() => windowUtils.addSheet(sheet, type));
+       }
+     }
+ 
+-- 
+2.56.0
+

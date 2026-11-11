@@ -1,0 +1,56 @@
+From 871c2b28d2b4e95dbf08c39a440af7b4aa6c3bc2 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 16:40:10 +0000
+Subject: [PATCH 095/156] transplant-fix: SafeArea Teil 2 -
+ Substitution-Durchleitung und Akkumulation nach 140er-Original
+
+---
+ servo/components/style/custom_properties.rs | 2 ++
+ servo/components/style/queries/condition.rs | 4 ++--
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/servo/components/style/custom_properties.rs b/servo/components/style/custom_properties.rs
+index 61141dddd9cf..3e1a6e54dd45 100644
+--- a/servo/components/style/custom_properties.rs
++++ b/servo/components/style/custom_properties.rs
+@@ -790,6 +790,7 @@ struct SubstitutionFunctionReference {
+     prev_token_type: TokenSerializationType,
+     next_token_type: TokenSerializationType,
+     substitution_kind: SubstitutionFunctionKind,
++    safe_area_inset_usage: u8,
+ }
+ 
+ /// A struct holding information about the external references to that a custom
+@@ -838,6 +839,7 @@ impl VariableValue {
+         last_token_type: TokenSerializationType,
+     ) -> Self {
+         Self {
++            safe_area_inset_usage: 0,
+             css,
+             url_data: url_data.clone(),
+             first_token_type,
+diff --git a/servo/components/style/queries/condition.rs b/servo/components/style/queries/condition.rs
+index ac0fdd4ee019..3776508505cf 100644
+--- a/servo/components/style/queries/condition.rs
++++ b/servo/components/style/queries/condition.rs
+@@ -420,7 +420,7 @@ impl StyleFeaturePlain {
+             Some(ctx.inherited_custom_properties().clone()),
+             None,
+         );
+-        let custom_properties::SubstitutionResult { css, attr_taint } =
++        let custom_properties::SubstitutionResult { css, attr_taint, safe_area_inset_usage: _ } =
+             match custom_properties::substitute(
+                 &value,
+                 &substitution_functions,
+@@ -890,7 +890,7 @@ impl QueryCondition {
+             Some(context.inherited_custom_properties().clone()),
+             None,
+         );
+-        let custom_properties::SubstitutionResult { css, attr_taint } =
++        let custom_properties::SubstitutionResult { css, attr_taint, safe_area_inset_usage: _ } =
+             match custom_properties::substitute(
+                 &value,
+                 &substitution_functions,
+-- 
+2.56.0
+

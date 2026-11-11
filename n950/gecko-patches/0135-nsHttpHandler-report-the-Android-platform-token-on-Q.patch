@@ -1,0 +1,36 @@
+From ad6a2205313a5fb33dce95403195d54cb7de49ba Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sun, 23 Aug 2026 08:15:13 +0000
+Subject: [PATCH 135/156] nsHttpHandler: report the Android platform token on
+ Qt/EmbedLite (the mobile compat device with an X11 platform is read as a
+ manipulated client)
+
+---
+ netwerk/protocol/http/nsHttpHandler.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+index 1036b8cb2c25..3545c6f80f05 100644
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -1123,7 +1123,17 @@ void nsHttpHandler::InitUserAgentComponents() {
+       // and there seems little a webpage can sensibly do
+       // based on it being something else, so use X11 for
+       // backwards compatibility in all cases.
++      //
++      // EmbedLite reports "Mobile" as the compat device (see below); the
++      // combination "X11; Mobile" exists nowhere else on the web, and bot
++      // management services read it as a manipulated client. Report the same
++      // platform Firefox for Android does, which is what the mobile compat
++      // device implies.
++#  ifdef MOZ_WIDGET_QT
++      "Android 13"
++#  else
+       "X11"
++#  endif
+ #endif
+   );
+ 
+-- 
+2.56.0
+

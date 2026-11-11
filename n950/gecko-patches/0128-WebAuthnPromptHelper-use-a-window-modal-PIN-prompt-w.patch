@@ -1,0 +1,33 @@
+From 88abb2bd36a40c252cad01223befe1718da937c3 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 18:41:04 +0000
+Subject: [PATCH 128/156] WebAuthnPromptHelper: use a window-modal PIN prompt
+ when the embedder has no tab dialog box
+
+---
+ toolkit/modules/WebAuthnPromptHelper.sys.mjs | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/toolkit/modules/WebAuthnPromptHelper.sys.mjs b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+index c20a6fa433ae..f6be2e69ea5b 100644
+--- a/toolkit/modules/WebAuthnPromptHelper.sys.mjs
++++ b/toolkit/modules/WebAuthnPromptHelper.sys.mjs
+@@ -183,9 +183,14 @@ export let WebAuthnPromptHelper = {
+       );
+     }
+ 
++    // Tab-modal prompts need the desktop tab dialog box; embedders without
++    // PopupNotifications (e.g. EmbedLite) get the window prompt instead.
++    let modalType = browsingContext.topChromeWindow?.PopupNotifications
++      ? Services.prompt.MODAL_TYPE_TAB
++      : Services.prompt.MODAL_TYPE_WINDOW;
+     let res = Services.prompt.promptPasswordBC(
+       browsingContext,
+-      Services.prompt.MODAL_TYPE_TAB,
++      modalType,
+       origin,
+       dialogText,
+       aPassword
+-- 
+2.56.0
+

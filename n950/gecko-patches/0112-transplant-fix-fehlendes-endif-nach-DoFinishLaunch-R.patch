@@ -1,0 +1,34 @@
+From 5f7a7a20540594ff7996382f1d6130c71311e399 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 22:51:07 +0000
+Subject: [PATCH 112/156] transplant-fix: fehlendes #endif nach DoFinishLaunch
+ (Rebase-Doppelgaenger um Qt-Weiche JB#50505), Guard Serie-konform GTK||QT
+
+---
+ ipc/glue/GeckoChildProcessHost.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ipc/glue/GeckoChildProcessHost.cpp b/ipc/glue/GeckoChildProcessHost.cpp
+index 919bb2fab862..49d6aa32b4d6 100644
+--- a/ipc/glue/GeckoChildProcessHost.cpp
++++ b/ipc/glue/GeckoChildProcessHost.cpp
+@@ -1164,7 +1164,7 @@ void BaseProcessLauncher::MapChildLogging() {
+   }
+ }
+ 
+-#if defined(MOZ_WIDGET_GTK)
++#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ Result<Ok, LaunchError> BaseProcessLauncher::DoFinishLaunch() {
+   // We're in the parent and the child was launched. Clean up any FDs which were
+   // transferred to the child in the parent as soon as possible, which will
+@@ -1174,6 +1174,7 @@ Result<Ok, LaunchError> BaseProcessLauncher::DoFinishLaunch() {
+ 
+   return Ok();
+ }
++#endif
+ 
+ #if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ Result<Ok, LaunchError> LinuxProcessLauncher::DoSetup() {
+-- 
+2.56.0
+

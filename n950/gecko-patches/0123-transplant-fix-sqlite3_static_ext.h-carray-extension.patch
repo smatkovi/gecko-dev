@@ -1,0 +1,39 @@
+From 86b03433bc041052a900716d54dc5ebf83cb192d Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 09:13:30 +0000
+Subject: [PATCH 123/156] transplant-fix: sqlite3_static_ext.h - carray
+ extension include/declaration only with MOZ_SYSTEM_SQLITE (bundled SQLite
+ 3.53.2 has carray in the core, ext/misc/carray.* was removed upstream in Bug
+ 1998267)
+
+---
+ third_party/sqlite3/ext/sqlite3_static_ext.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/third_party/sqlite3/ext/sqlite3_static_ext.h b/third_party/sqlite3/ext/sqlite3_static_ext.h
+index 25c4270b186d..ba9b0f18cdbf 100644
+--- a/third_party/sqlite3/ext/sqlite3_static_ext.h
++++ b/third_party/sqlite3/ext/sqlite3_static_ext.h
+@@ -12,14 +12,19 @@
+ #ifndef SQLITE3_STATIC_EXT_H
+ #define SQLITE3_STATIC_EXT_H
+ #include "sqlite3.h"
++#ifdef MOZ_SYSTEM_SQLITE
++/* The platform SQLite has no carray(); Gecko carries the extension copy. */
+ #include "misc/carray.h"
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ 
++#ifdef MOZ_SYSTEM_SQLITE
+ SQLITE_API int sqlite3_carray_init(sqlite3*, char**,
+                                    const sqlite3_api_routines*);
++#endif
+ SQLITE_API int sqlite3_vec_init(sqlite3*, char**,
+                                 const sqlite3_api_routines*);
+ 
+-- 
+2.56.0
+

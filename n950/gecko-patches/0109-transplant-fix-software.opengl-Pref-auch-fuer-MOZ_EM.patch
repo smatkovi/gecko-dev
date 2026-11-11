@@ -1,0 +1,26 @@
+From 0698e0676a4a53f06e1817823ebc6038c9af6387 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 20:33:44 +0000
+Subject: [PATCH 109/156] transplant-fix: software.opengl-Pref auch fuer
+ MOZ_EMBEDLITE definieren (Teil 2 zum Getter-Fix)
+
+---
+ modules/libpref/init/StaticPrefList.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index ea82d257c7b0..6068a68898d6 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -8595,7 +8595,7 @@
+   mirror: always
+ #endif
+ 
+-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
++#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK) || defined(MOZ_EMBEDLITE)
+ - name: gfx.webrender.software.opengl
+   type: bool
+ #if defined(MOZ_WIDGET_ANDROID)
+-- 
+2.56.0
+

@@ -1,0 +1,34 @@
+From ea66694f412de401c5fcaad5af283c10aefa98d1 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 21:33:51 +0000
+Subject: [PATCH 111/156] transplant-fix: GNOME-GSettings-Fallback in HourCycle
+ guarden (153er verlor transitives Include-Netz; Sailfish-dconf bleibt
+ Erstschlag)
+
+---
+ intl/locale/gtk/OSPreferences_gtk.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/intl/locale/gtk/OSPreferences_gtk.cpp b/intl/locale/gtk/OSPreferences_gtk.cpp
+index 5b8147fa454a..3916c31a78e5 100644
+--- a/intl/locale/gtk/OSPreferences_gtk.cpp
++++ b/intl/locale/gtk/OSPreferences_gtk.cpp
+@@ -92,6 +92,7 @@ static int HourCycle() {
+   }
+ #endif
+ 
++#ifdef MOZ_ENABLE_GSETTINGS
+   nsCOMPtr<nsIGSettingsService> gsettings =
+       do_GetService(NS_GSETTINGSSERVICE_CONTRACTID);
+   if (!gsettings) {
+@@ -113,6 +114,7 @@ static int HourCycle() {
+   if (result == "24h") {
+     return 24;
+   }
++#endif
+   return 0;
+ }
+ 
+-- 
+2.56.0
+

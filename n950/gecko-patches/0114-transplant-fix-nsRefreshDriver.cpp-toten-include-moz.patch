@@ -1,0 +1,26 @@
+From b20764fa228ca450b67511c79e0446175829b787 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 01:19:11 +0000
+Subject: [PATCH 114/156] transplant-fix: nsRefreshDriver.cpp - toten #include
+ mozilla/Unused.h entfernt (Upstream Bug 1994397 hat den Header entfernt,
+ Serie-Hunk nutzt Unused nicht)
+
+---
+ layout/base/nsRefreshDriver.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/layout/base/nsRefreshDriver.cpp b/layout/base/nsRefreshDriver.cpp
+index 3a8b655ff231..ab10e354ed9f 100644
+--- a/layout/base/nsRefreshDriver.cpp
++++ b/layout/base/nsRefreshDriver.cpp
+@@ -83,7 +83,6 @@
+ #include "VsyncSource.h"
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/VsyncDispatcher.h"
+-#include "mozilla/Unused.h"
+ #include "nsAnimationManager.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsContentUtils.h"
+-- 
+2.56.0
+

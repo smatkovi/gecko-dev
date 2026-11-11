@@ -1,0 +1,35 @@
+From 9bdf37ed3a4211fc5af60374d42664c9979813ab Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 10:23:19 +0000
+Subject: [PATCH 125/156] transplant-fix: WebGPUParent - stub
+ wgpu_server_get_dma_buf_fd/get_vk_image_handle on non-GTK Linux (Rust
+ wgpu_bindings references them on every Linux target, DMA-BUF sharing is
+ GTK-only here)
+
+---
+ dom/webgpu/ipc/WebGPUParent.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dom/webgpu/ipc/WebGPUParent.cpp b/dom/webgpu/ipc/WebGPUParent.cpp
+index c9d7ca957749..d1c62666b63a 100644
+--- a/dom/webgpu/ipc/WebGPUParent.cpp
++++ b/dom/webgpu/ipc/WebGPUParent.cpp
+@@ -130,6 +130,15 @@ extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
+ #endif
+ }
+ #endif
++#if defined(XP_LINUX) && !defined(MOZ_WIDGET_GTK)
++// wgpu stubs for non-GTK Linux (EmbedLite/Qt): the Rust side of wgpu_bindings
++// references these on every Linux target, but DMA-BUF shared textures are
++// only implemented for GTK. Report "no shared texture".
++extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent, WGPUTextureId aId) { return -1; }
++extern const WGPUVkImageHandle* wgpu_server_get_vk_image_handle(WGPUWebGPUParentPtr aParent, WGPUTextureId aId) {
++  return nullptr;
++}
++#endif
+ 
+ #ifdef MOZ_WIDGET_GTK
+ extern const WGPUVkImageHandle* wgpu_server_get_vk_image_handle(
+-- 
+2.56.0
+

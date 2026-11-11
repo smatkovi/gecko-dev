@@ -1,0 +1,37 @@
+From e7fdb38c60af92cf1917a6348db6f770d97bda04 Mon Sep 17 00:00:00 2001
+From: Raine Makelainen <raine.makelainen@jolla.com>
+Date: Tue, 14 Jul 2020 17:53:04 +0300
+Subject: [PATCH 007/156] *mb2-prepare* Whitelist sync messages of EmbedLite.
+ JB#50505
+
+Signed-off-by: Pavel Tumakaev <p.tumakaev@omprussia.ru>
+Signed-off-by: Raine Makelainen <raine.makelainen@jolla.com>
+Mb2-scrape: filename=0007-Whitelist-sync-messages-of-EmbedLite.-JB-50505.patch
+---
+ ipc/ipdl/sync-messages.ini | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/ipc/ipdl/sync-messages.ini b/ipc/ipdl/sync-messages.ini
+index d56225567094..af023ba83057 100644
+--- a/ipc/ipdl/sync-messages.ini
++++ b/ipc/ipdl/sync-messages.ini
+@@ -9,6 +9,16 @@
+ #                                                           #
+ #############################################################
+ 
++# EmbedLite
++[PEmbedLiteApp::CreateWindow]
++description = EmbedLite
++[PEmbedLiteView::GetDPI]
++description = EmbedLite
++[PEmbedLiteView::SyncMessage]
++description = EmbedLite
++[PEmbedLiteView::GetInputContext]
++description = EmbedLite
++
+ # gtests
+ [PQuotaTest::Try_Success_CustomErr_QmIpcFail]
+ description = Only used by gtests
+-- 
+2.56.0
+

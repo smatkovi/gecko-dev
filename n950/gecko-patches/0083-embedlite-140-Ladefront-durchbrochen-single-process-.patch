@@ -1,0 +1,80 @@
+From e206e601c7153ae027a712ff5719e60a6bb7aa95 Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Thu, 20 Aug 2026 00:17:06 +0200
+Subject: [PATCH 083/156] embedlite-140: Ladefront durchbrochen -
+ single-process erzwingen
+
+Gecko 140 versucht fuer jeden Dokument-Load einen Prozess-Switch
+(ChangeRemoteness), der im Single-Process-EmbedLite ins Leere greift
+(8000ffff), und blockt danach file:// im Parent (805e0006).
+
+- DocumentLoadListener: kein Prozess-Switch ohne UseRemoteTabs
+- nsAppRunner: BrowserTabsRemoteAutostart() unter MOZ_EMBEDLITE false
+- WebRenderBridgeParent: dlBytes+TxnURL-Diagnose
+
+Erste echte Seiten-DisplayLists der Portierung (dlBytes 1113-5538,
+13x rich.html ohne Env-Kruecken).
+---
+ gfx/layers/wr/WebRenderBridgeParent.cpp | 6 ++++--
+ netwerk/ipc/DocumentLoadListener.cpp    | 9 +++++++++
+ toolkit/xre/nsAppRunner.cpp             | 6 ++++++
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/layers/wr/WebRenderBridgeParent.cpp b/gfx/layers/wr/WebRenderBridgeParent.cpp
+index 354f048be860..765d624ca9eb 100644
+--- a/gfx/layers/wr/WebRenderBridgeParent.cpp
++++ b/gfx/layers/wr/WebRenderBridgeParent.cpp
+@@ -1456,9 +1456,11 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvSetDisplayList(
+   }
+ 
+   LOG("WebRenderBridgeParent::RecvSetDisplayList() PipelineId %" PRIx64
+-      " Id %" PRIx64 " root %d",
++      " Id %" PRIx64 " root %d dlBytes %zu url %s",
+       wr::AsUint64(mPipelineId), wr::AsUint64(mLateInit->mApi->GetId()),
+-      IsRootWebRenderBridgeParent());
++      IsRootWebRenderBridgeParent(),
++      aDisplayList.mDLItems ? size_t(aDisplayList.mDLItems->mLen) : size_t(0),
++      PromiseFlatCString(aTxnURL).get());
+ 
+   if (!IsRootWebRenderBridgeParent()) {
+     CrashReporter::RecordAnnotationNSCString(CrashReporter::Annotation::URL,
+diff --git a/netwerk/ipc/DocumentLoadListener.cpp b/netwerk/ipc/DocumentLoadListener.cpp
+index 1a672272be7e..734fc7569139 100644
+--- a/netwerk/ipc/DocumentLoadListener.cpp
++++ b/netwerk/ipc/DocumentLoadListener.cpp
+@@ -1842,6 +1842,15 @@ static bool ContextCanProcessSwitch(CanonicalBrowsingContext* aBrowsingContext,
+     return false;
+   }
+ 
++  // EmbedLite/single-process embedding: without remote tabs there is no
++  // content process to switch into - a switch attempt can only fail
++  // (ChangeRemoteness has no <browser> abstraction to work with).
++  if (!aBrowsingContext->UseRemoteTabs()) {
++    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
++            ("Process Switch Abort: remote tabs disabled"));
++    return false;
++  }
++
+   // If we're switching into a new tab, we can skip the remaining checks, as
+   // we're not actually changing the process of aBrowsingContext, so whether or
+   // not it is allowed to process switch isn't relevant.
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 466bcbb4b5ab..6a095cd5ab99 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -573,6 +573,12 @@ static bool gBrowserTabsRemoteAutostartInitialized = false;
+ namespace mozilla {
+ 
+ bool BrowserTabsRemoteAutostart() {
++#if defined(MOZ_EMBEDLITE)
++  // EmbedLite ist per Definition single-process: nie Remote-Tabs autostarten.
++  // (Verhindert Process-Switch-Versuche und den CanLoadInParentProcess-Block.)
++  return false;
++#endif
++
+   if (gBrowserTabsRemoteAutostartInitialized) {
+     return gBrowserTabsRemoteAutostart;
+   }
+-- 
+2.56.0
+

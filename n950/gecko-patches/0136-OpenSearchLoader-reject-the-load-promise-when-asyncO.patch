@@ -1,0 +1,31 @@
+From 60451336b0bde73b45f065e104a5529f0cbdb79e Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sun, 23 Aug 2026 08:41:10 +0000
+Subject: [PATCH 136/156] OpenSearchLoader: reject the load promise when
+ asyncOpen throws (a synchronous failure left the promise pending forever)
+
+---
+ toolkit/components/search/OpenSearchLoader.sys.mjs | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/toolkit/components/search/OpenSearchLoader.sys.mjs b/toolkit/components/search/OpenSearchLoader.sys.mjs
+index 76c75e60ffdb..430536f0b326 100644
+--- a/toolkit/components/search/OpenSearchLoader.sys.mjs
++++ b/toolkit/components/search/OpenSearchLoader.sys.mjs
+@@ -206,7 +206,12 @@ function loadEngineXML(sourceURI, lastModified, originAttributes = null) {
+     loadHandler
+   );
+   chan.notificationCallbacks = listener;
+-  chan.asyncOpen(listener);
++  try {
++    chan.asyncOpen(listener);
++  } catch (e) {
++    lazy.logConsole.debug("asyncOpen failed:", e);
++    loadPromise.reject(e);
++  }
+ 
+   return loadPromise.promise;
+ }
+-- 
+2.56.0
+

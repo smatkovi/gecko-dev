@@ -1,0 +1,67 @@
+From 42b32057fc41d7ca05c7a136f27483c572cbf1f0 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sat, 22 Aug 2026 01:38:15 +0000
+Subject: [PATCH 116/156] transplant-fix: mfbt/Unused.h als header-only
+ Kompat-Shim zurueck (Upstream Bug 1994397 hat ihn entfernt, embedlite nutzt
+ Unused << an 84 Stellen); Unused << already_AddRefed bewusst = delete
+
+---
+ mfbt/Unused.h  | 33 +++++++++++++++++++++++++++++++++
+ mfbt/moz.build |  1 +
+ 2 files changed, 34 insertions(+)
+ create mode 100644 mfbt/Unused.h
+
+diff --git a/mfbt/Unused.h b/mfbt/Unused.h
+new file mode 100644
+index 000000000000..b9f7471c495f
+--- /dev/null
++++ b/mfbt/Unused.h
+@@ -0,0 +1,33 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/* Compatibility shim for the EmbedLite series. Upstream removed
++ * mozilla::Unused (Bug 1994397, Firefox 146); embedding/ still uses
++ * `Unused << expr` in ~84 places. Header-only, no MFBT_DATA symbol.
++ * `Unused << already_AddRefed<T>` is deliberately deleted: the old friend
++ * operator released the reference, a silent leak would be worse than a
++ * compile error. */
++
++#ifndef mozilla_Unused_h
++#define mozilla_Unused_h
++
++#include "mozilla/AlreadyAddRefed.h"
++#include "mozilla/Attributes.h"
++
++namespace mozilla {
++
++struct unused_t {
++  template <typename T>
++  inline void operator<<(const T& /*unused*/) const {}
++
++  template <typename T>
++  void operator<<(::already_AddRefed<T>&&) const = delete;
++};
++
++inline constexpr unused_t Unused{};
++
++}  // namespace mozilla
++
++#endif  // mozilla_Unused_h
+diff --git a/mfbt/moz.build b/mfbt/moz.build
+index ecbcd29c709f..02dceade7e5f 100644
+--- a/mfbt/moz.build
++++ b/mfbt/moz.build
+@@ -119,6 +119,7 @@ EXPORTS.mozilla = [
+     "Types.h",
+     "UniquePtr.h",
+     "UniquePtrExtensions.h",
++    "Unused.h",
+     "UsingEnum.h",
+     "Utf8.h",
+     "Variant.h",
+-- 
+2.56.0
+

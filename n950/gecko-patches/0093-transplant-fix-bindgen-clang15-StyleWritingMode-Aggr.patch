@@ -1,0 +1,26 @@
+From b240f639ed47c01db4d4fe4ae40ffc51da7dbbe4 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 16:00:32 +0000
+Subject: [PATCH 093/156] transplant-fix: bindgen/clang15 - StyleWritingMode
+ Aggregat-Init mit Braces (kein Konvertierungs-Ctor vorhanden)
+
+---
+ layout/generic/WritingModes.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/layout/generic/WritingModes.h b/layout/generic/WritingModes.h
+index add7af05fd48..11a524b106c7 100644
+--- a/layout/generic/WritingModes.h
++++ b/layout/generic/WritingModes.h
+@@ -483,7 +483,7 @@ class WritingMode {
+   }
+ 
+   inline StyleWritingMode ToStyleWritingMode() const {
+-    return StyleWritingMode(GetBits());
++    return StyleWritingMode{GetBits()};
+   }
+ 
+   /**
+-- 
+2.56.0
+

@@ -1,0 +1,65 @@
+From 7003c5647504a406b3faa2c3cea3089b613e3690 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 17:28:59 +0000
+Subject: [PATCH 100/156] transplant-fix: CamerasParent-Doppelgaenger (zweiter
+ Anlauf) + rtc-Nachzuegler make_ref_counted/TimeMillis
+
+---
+ dom/media/systemservices/CamerasParent.cpp                | 8 ++++----
+ .../modules/video_capture/sfos/video_capture_sfos.cc      | 2 +-
+ .../libwebrtc/modules/video_capture/video_capture_impl.cc | 2 +-
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/dom/media/systemservices/CamerasParent.cpp b/dom/media/systemservices/CamerasParent.cpp
+index adae99d75bcf..5e8a667c08d3 100644
+--- a/dom/media/systemservices/CamerasParent.cpp
++++ b/dom/media/systemservices/CamerasParent.cpp
+@@ -886,15 +886,15 @@ VideoEngine* CamerasParent::EnsureInitialized(CaptureEngine aEngine) {
+     return nullptr;
+   }
+ 
+-  if (VideoEngine* engine = mEngines->ElementAt(aEngine); engine) {
+ #ifdef MOZ_EMBEDLITE
+-  if (capEngine != CameraEngine) {
+-    LOG("Capture engine %d is not supported by EmbedLite", aEngine);
++  if (aEngine != CaptureEngine::CameraEngine) {
++    LOG("Capture engine {} is not supported by EmbedLite",
++        static_cast<int>(aEngine));
+     return nullptr;
+   }
+ #endif
+ 
+-  if (VideoEngine* engine = mEngines->ElementAt(capEngine); engine) {
++  if (VideoEngine* engine = mEngines->ElementAt(aEngine); engine) {
+     return engine;
+   }
+ 
+diff --git a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+index 480cb81c7d3f..f5fd898a0b78 100644
+--- a/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
++++ b/third_party/libwebrtc/modules/video_capture/sfos/video_capture_sfos.cc
+@@ -20,7 +20,7 @@ namespace videocapturemodule {
+ 
+ webrtc::scoped_refptr<VideoCaptureModule> VideoCaptureImpl::Create(
+     const char* device_unique_id_utf8) {
+-  auto implementation = rtc::make_ref_counted<VideoCaptureModuleSFOS>();
++  auto implementation = webrtc::make_ref_counted<VideoCaptureModuleSFOS>();
+   if (implementation->Init(device_unique_id_utf8) != 0) {
+     return nullptr;
+   }
+diff --git a/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc b/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
+index 212092b9b0b4..d23ac1a9e20f 100644
+--- a/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
++++ b/third_party/libwebrtc/modules/video_capture/video_capture_impl.cc
+@@ -278,7 +278,7 @@ int32_t VideoCaptureImpl::IncomingVideoBuffer(
+       VideoFrame::Builder()
+           .set_video_frame_buffer(buffer)
+           .set_rtp_timestamp(0)
+-          .set_timestamp_ms(rtc::TimeMillis())
++          .set_timestamp_ms(webrtc::TimeMillis())
+           .set_rotation(_rotateFrame)
+           .build();
+   capture_frame.set_ntp_time_ms(capture_time);
+-- 
+2.56.0
+

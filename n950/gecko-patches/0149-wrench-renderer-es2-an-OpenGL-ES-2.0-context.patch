@@ -1,0 +1,43 @@
+From 5e61079645dd9fe182ff1913b6a55d171af633fc Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 11:56:17 +0100
+Subject: [PATCH 149/156] wrench: --renderer es2, an OpenGL ES 2.0 context
+
+For the WebRender port to OpenGL ES 2.0 GPUs (PowerVR SGX5xx): run
+wrench and its reftests in an ES 2.0 context.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/args.yaml | 2 +-
+ gfx/wr/wrench/src/main.rs   | 2 ++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/wr/wrench/src/args.yaml b/gfx/wr/wrench/src/args.yaml
+index 4e2413c90288..49ffbd5762c2 100644
+--- a/gfx/wr/wrench/src/args.yaml
++++ b/gfx/wr/wrench/src/args.yaml
+@@ -67,7 +67,7 @@ args:
+       global: true
+   - renderer:
+       long: renderer
+-      help: Select rendering API (gl3, es3)
++      help: Select rendering API (gl3, es3, es2)
+       takes_value: true
+       global: true
+   - no_block:
+diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
+index 4d32c232ee4f..c0b483b219df 100644
+--- a/gfx/wr/wrench/src/main.rs
++++ b/gfx/wr/wrench/src/main.rs
+@@ -1169,6 +1169,8 @@ fn build_app(args: clap::ArgMatches, proxy: Option<EventLoopProxy<()>>) -> Wrenc
+     let opengl_version = (3u8, 2u8);
+     let gl_request = match args.value_of("renderer") {
+         Some("es3") => GlApiRequest::OpenGlEs { major: opengles_version.0, minor: opengles_version.1 },
++        // OpenGL ES 2.0 only, as on the PowerVR SGX5xx
++        Some("es2") => GlApiRequest::OpenGlEs { major: 2, minor: 0 },
+         Some("gl3") => GlApiRequest::OpenGl { major: opengl_version.0, minor: opengl_version.1 },
+         Some("default") | None => {
+             if angle || cfg!(target_os = "android") {
+-- 
+2.56.0
+

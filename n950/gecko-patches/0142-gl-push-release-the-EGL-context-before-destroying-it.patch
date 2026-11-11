@@ -1,0 +1,55 @@
+From 38071436ef9d896a568896b5f070b1235894e703 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Tue, 25 Aug 2026 20:39:56 +0000
+Subject: [PATCH 142/156] gl,push: release the EGL context before destroying
+ it, and register PushManager everywhere
+
+eglDestroyContext on a context that is still current only flags it for
+deletion, and the Adreno driver then unbinds it itself from inside
+eglDestroyContext, reaching EglContext::UnmakeCurrentEsx() on an already torn
+down object. Release it first.
+
+PushManager was registered CONTENT_PROCESS_ONLY, so in single process mode it
+never existed and pushManager.subscribe() failed with
+NS_ERROR_FACTORY_NOT_REGISTERED.
+---
+ dom/push/components.conf        | 5 ++++-
+ gfx/gl/GLContextProviderEGL.cpp | 6 ++++++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/dom/push/components.conf b/dom/push/components.conf
+index 8817e10ee809..85a85dea81c3 100644
+--- a/dom/push/components.conf
++++ b/dom/push/components.conf
+@@ -8,7 +8,10 @@ Classes = [
+         'contract_ids': ['@mozilla.org/push/PushManager;1'],
+         'esModule': 'resource://gre/modules/Push.sys.mjs',
+         'constructor': 'Push',
+-        'processes': ProcessSelector.CONTENT_PROCESS_ONLY,
++        # EmbedLite laeuft ohne eigenen Content-Prozess, dort wuerde
++        # CONTENT_PROCESS_ONLY die Registrierung ganz verhindern und
++        # PushManager.subscribe() mit NS_ERROR_FACTORY_NOT_REGISTERED scheitern.
++        'processes': ProcessSelector.ANY_PROCESS,
+     },
+     {
+         'cid': '{2fc2d3e3-020f-404e-b06a-6ecf3ea2334a}',
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index 4dacbe008985..661d9abb8d59 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp
+@@ -540,6 +540,12 @@ GLContextEGL::~GLContextEGL() {
+                 mSurface, mEgl->mDisplay);
+ #endif
+ 
++  // Release the context before destroying it. eglDestroyContext on a context
++  // that is still current only flags it for deletion, and the Adreno driver
++  // unbinds it itself from inside eglDestroyContext - reaching
++  // EglContext::UnmakeCurrentEsx() on an already torn down object.
++  mEgl->fMakeCurrent(EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++
+   mEgl->fDestroyContext(mContext);
+ 
+   DestroySurface(*mEgl, mSurface);
+-- 
+2.56.0
+

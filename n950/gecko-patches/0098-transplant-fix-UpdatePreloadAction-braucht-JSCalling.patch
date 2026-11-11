@@ -1,0 +1,26 @@
+From 93b55bb588391109acd9d6139b29012992913799 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 17:06:28 +0000
+Subject: [PATCH 098/156] transplant-fix: UpdatePreloadAction braucht
+ JSCallingLocation (Upstream-API-Drift, Autoplay-Hunk)
+
+---
+ dom/media/mediaelement/HTMLMediaElement.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dom/media/mediaelement/HTMLMediaElement.cpp b/dom/media/mediaelement/HTMLMediaElement.cpp
+index cba28f7a0841..f2236e65c0d0 100644
+--- a/dom/media/mediaelement/HTMLMediaElement.cpp
++++ b/dom/media/mediaelement/HTMLMediaElement.cpp
+@@ -6158,7 +6158,7 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
+   mLoadedDataFired = false;
+   ChangeReadyState(HAVE_METADATA);
+   if (HasAttr(kNameSpaceID_None, nsGkAtoms::autoplay)) {
+-    UpdatePreloadAction();
++    UpdatePreloadAction(JSCallingLocation::Get());
+   }
+ 
+   // Add output tracks synchronously now to be sure they're available in
+-- 
+2.56.0
+

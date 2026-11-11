@@ -1,0 +1,158 @@
+From 75f9cab5bc29c5808f2378b871b16830fc7d879f Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Sun, 23 Aug 2026 20:30:11 +0000
+Subject: [PATCH 139/156] gl: track surface age in the swap chain and report it
+ from RenderCompositorEGL; gfxPlatform: set UseEGL for EmbedLite;
+ embedding.js: prefer GLES
+
+---
+ gfx/gl/GLContextProviderEGL.cpp                | 11 +++++++++--
+ gfx/gl/GLScreenBuffer.cpp                      | 12 ++++++++++++
+ gfx/gl/GLScreenBuffer.h                        | 13 +++++++++++++
+ gfx/thebes/gfxPlatform.cpp                     |  7 +++++++
+ gfx/webrender_bindings/RenderCompositorEGL.cpp |  7 +++++++
+ 5 files changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index 9960ad35f510..4dacbe008985 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp
+@@ -756,6 +756,7 @@ RefPtr<GLContextEGL> GLContextEGL::CreateGLContext(
+   if (useGles) {
+     // TODO: This fBindAPI could be more thread-safe
+     if (egl->mLib->fBindAPI(LOCAL_EGL_OPENGL_ES_API) == LOCAL_EGL_FALSE) {
++      printf_stderr("EL-EGL bindAPI(ES) failed err=0x%x\n", (unsigned)egl->mLib->fGetError());
+       *out_failureId = "FEATURE_FAILURE_EGL_ES"_ns;
+       NS_WARNING("Failed to bind API to GLES!");
+       return nullptr;
+@@ -768,6 +769,7 @@ RefPtr<GLContextEGL> GLContextEGL::CreateGLContext(
+     }
+   } else {
+     if (egl->mLib->fBindAPI(LOCAL_EGL_OPENGL_API) == LOCAL_EGL_FALSE) {
++      printf_stderr("EL-EGL bindAPI(GL) failed err=0x%x\n", (unsigned)egl->mLib->fGetError());
+       *out_failureId = "FEATURE_FAILURE_EGL"_ns;
+       NS_WARNING("Failed to bind API to GL!");
+       return nullptr;
+@@ -858,8 +860,13 @@ RefPtr<GLContextEGL> GLContextEGL::CreateGLContext(
+       terminated_attribs.push_back(cur);
+     }
+ 
+-    return egl->fCreateContext(contextConfig, EGL_NO_CONTEXT,
+-                               terminated_attribs.data());
++    const auto ctx = egl->fCreateContext(contextConfig, EGL_NO_CONTEXT,
++                                         terminated_attribs.data());
++    if (!ctx) {
++      printf_stderr("EL-EGL create failed err=0x%x attribs=%zu\n",
++                    (unsigned)egl->mLib->fGetError(), terminated_attribs.size());
++    }
++    return ctx;
+   };
+ 
+   EGLContext context;
+diff --git a/gfx/gl/GLScreenBuffer.cpp b/gfx/gl/GLScreenBuffer.cpp
+index 5643129bfc9b..f9b62512ebe6 100644
+--- a/gfx/gl/GLScreenBuffer.cpp
++++ b/gfx/gl/GLScreenBuffer.cpp
+@@ -53,6 +53,16 @@ UniquePtr<SwapChainPresenter> SwapChain::Acquire(
+     }
+   }
+ 
++  ++mAcquireCounter;
++  {
++    const auto it = mLastAcquired.find(surf.get());
++    mLastAcquiredAge =
++        (it == mLastAcquired.end())
++            ? 0
++            : static_cast<size_t>(mAcquireCounter - it->second);
++    mLastAcquired[surf.get()] = mAcquireCounter;
++  }
++
+   auto ret = MakeUnique<SwapChainPresenter>(*this);
+   const auto old = ret->SwapBackBuffer(std::move(surf));
+   MOZ_ALWAYS_TRUE(!old);
+@@ -62,6 +72,8 @@ UniquePtr<SwapChainPresenter> SwapChain::Acquire(
+ void SwapChain::ClearPool() {
+   mPool = {};
+   mPrevFrontBuffer = nullptr;
++  mLastAcquired.clear();
++  mLastAcquiredAge = 0;
+ }
+ 
+ bool SwapChain::StoreRecycledSurface(
+diff --git a/gfx/gl/GLScreenBuffer.h b/gfx/gl/GLScreenBuffer.h
+index a8e5bdaa43ea..631d0a4d3667 100644
+--- a/gfx/gl/GLScreenBuffer.h
++++ b/gfx/gl/GLScreenBuffer.h
+@@ -66,6 +66,9 @@ class SwapChain final {
+       mPrevFrontBuffer;  // Hold this ref while it's in-flight.
+  private:
+   SwapChainPresenter* mPresenter = nullptr;
++  uint64_t mAcquireCounter = 0;
++  std::unordered_map<const SharedSurface*, uint64_t> mLastAcquired;
++  size_t mLastAcquiredAge = 0;
+ 
+  public:
+   SwapChain();
+@@ -82,6 +85,11 @@ class SwapChain final {
+   void ClearPool();
+   bool StoreRecycledSurface(const std::shared_ptr<SharedSurface>& surf);
+   const auto& FrontBuffer() const { return mFrontBuffer; }
++
++  // Age of the surface handed out by the most recent Acquire(): how many
++  // Acquire() calls ago the same surface was last used, or 0 when it has
++  // never been used before (then its contents are undefined).
++  size_t LastAcquiredAge() const { return mLastAcquiredAge; }
+   UniquePtr<SwapChainPresenter> Acquire(const gfx::IntSize&, gfx::ColorSpace2,
+                                         gfx::TransferFunction);
+ 
+@@ -108,6 +116,11 @@ class GLScreenBuffer final {
+   bool PublishFrame(const gfx::IntSize&);
+   const gfx::IntSize& Size() const { return mSize; }
+   const std::shared_ptr<SharedSurface>& FrontBuffer() const;
++  // Age of the surface the swap chain handed out most recently; see
++  // SwapChain::LastAcquiredAge(). 0 means "contents unknown".
++  size_t LastAcquiredAge() const {
++    return mSwapChain ? mSwapChain->LastAcquiredAge() : 0;
++  }
+   GLuint Fb() const;
+ };
+ 
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+index f746c66b3f81..fbd3fbddd0e3 100644
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -823,6 +823,13 @@ void gfxPlatform::Init() {
+   gfxConfig::Init();
+ 
+   if (XRE_IsParentProcess()) {
++#ifdef MOZ_EMBEDLITE
++    // Only the GTK backend ever sets this, and EmbedLite has no GLX path.
++    // Without it RenderCompositorEGL::Create() bails out on its first line
++    // (kIsLinux && !gfxVars::UseEGL()), so the offscreen compositing path is
++    // never entered and every frame falls back to software.
++    gfxVars::SetUseEGL(true);
++#endif
+     GPUProcessManager::Initialize();
+     RDDProcessManager::Initialize();
+ 
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index fbd0278db6e0..b34f4e90b0e5 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -435,6 +435,13 @@ bool RenderCompositorEGL::ShouldDrawPreviousPartialPresentRegions() {
+ 
+ size_t RenderCompositorEGL::GetBufferAge() const {
+ #ifdef MOZ_EMBEDLITE
++  if (mUseEmbedLiteOffscreen && gl() && gl()->Screen()) {
++    // The offscreen path rotates SharedSurfaces; the swap chain now tracks
++    // how many Acquire() calls ago each surface was last used, which is the
++    // same semantics EGL_BUFFER_AGE_EXT provides. 0 means "contents unknown"
++    // and makes WebRender render the full frame.
++    return gl()->Screen()->LastAcquiredAge();
++  }
+   return 0;  // Alter unbekannt -> WebRender rendert voll.
+ #else
+   if (!StaticPrefs::gfx_webrender_allow_partial_present_buffer_age_AtStartup()) {
+-- 
+2.56.0
+

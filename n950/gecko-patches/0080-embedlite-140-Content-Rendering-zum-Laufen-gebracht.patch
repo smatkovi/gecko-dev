@@ -1,0 +1,337 @@
+From 85e82e32b7d5e56f6ebed93eebab9082aac39002 Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Wed, 19 Aug 2026 11:36:28 +0200
+Subject: [PATCH 080/156] embedlite-140: Content-Rendering zum Laufen gebracht
+
+- EmbedLitePuppetWidget::NeedsPaint: '|| mView'-Gate der Layers-Aera entfernt
+  (im WR-140 laeuft Content-Paint ueber den ViewManager - vorher nie eine DisplayList)
+- EmbedLiteViewChild::RecvSetIsActive: PresShell::Initialize nachgeholt
+  (ohne DidInitialize bleibt Document::IsRenderingSuppressed dauerhaft true)
+- GLContextEGL-Dtor: GLScreenBuffer vor MarkDestroyed abbauen (pure-virtual/Nullptr)
+- EmbedLiteViewParent: APZ-Zoom-Handler stillgelegt (TreeManager nicht verdrahtet)
+- nsWindow::PreRender: CBP-getriebene Frames am vis/act-Gate durchlassen
+- dazu Diagnose-Instrumentierung (EL-A..Z16, Selbsttest, Vsync/Paint-Kette)
+---
+ gfx/gl/GLContextProviderEGL.cpp                |  7 +++++++
+ gfx/thebes/SoftwareVsyncSource.cpp             |  3 +++
+ gfx/thebes/VsyncSource.cpp                     |  4 ++++
+ gfx/webrender_bindings/RenderCompositorEGL.cpp | 10 +++++++++-
+ gfx/webrender_bindings/RenderCompositorOGL.cpp |  1 +
+ gfx/webrender_bindings/RendererOGL.cpp         |  3 +++
+ layout/base/PresShell.cpp                      |  2 ++
+ layout/base/nsRefreshDriver.cpp                | 13 +++++++++++++
+ widget/VsyncDispatcher.cpp                     |  4 ++++
+ 9 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index 9ef1fc1caa6b..9960ad35f510 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp
+@@ -521,6 +521,13 @@ void GLContextEGL::OnMarkDestroyed() {
+ }
+ 
+ GLContextEGL::~GLContextEGL() {
++  // EmbedLite/0072: Screen (SwapChain/SharedSurfaces) VOR MarkDestroyed abbauen -
++  // ProducerRelease braucht lebende GL-Symbols und die EGL-vtable.
++  if (mScreen) {
++    MakeCurrent();
++    mScreen = nullptr;
++  }
++
+   MarkDestroyed();
+ 
+   // Wrapped context should not destroy eglContext/Surface
+diff --git a/gfx/thebes/SoftwareVsyncSource.cpp b/gfx/thebes/SoftwareVsyncSource.cpp
+index 83d29958f906..e338675cea1f 100644
+--- a/gfx/thebes/SoftwareVsyncSource.cpp
++++ b/gfx/thebes/SoftwareVsyncSource.cpp
+@@ -6,6 +6,7 @@
+ #include "SoftwareVsyncSource.h"
+ #include "base/task.h"
+ #include "gfxPlatform.h"
++#include "mozilla/gfx/Logging.h"
+ #include "nsThreadUtils.h"
+ 
+ namespace mozilla::gfx {
+@@ -35,6 +36,7 @@ void SoftwareVsyncSource::EnableVsync() {
+       return;
+     }
+     mVsyncEnabled = true;
++    gfxCriticalNote << "EL-Y5 SVS enabled(main)";
+ 
+     mVsyncThread->message_loop()->PostTask(
+         NewRunnableMethod("SoftwareVsyncSource::EnableVsync", this,
+@@ -42,6 +44,7 @@ void SoftwareVsyncSource::EnableVsync() {
+     return;
+   }
+ 
++  gfxCriticalNote << "EL-Y6 SVS first tick";
+   MOZ_ASSERT(IsInSoftwareVsyncThread());
+   TimeStamp vsyncTime = TimeStamp::Now();
+   TimeStamp outputTime = vsyncTime + GetVsyncRate();
+diff --git a/gfx/thebes/VsyncSource.cpp b/gfx/thebes/VsyncSource.cpp
+index 6d4d3fa2388e..a6148b3da8c0 100644
+--- a/gfx/thebes/VsyncSource.cpp
++++ b/gfx/thebes/VsyncSource.cpp
+@@ -8,6 +8,7 @@
+ #include "mozilla/VsyncDispatcher.h"
+ #include "MainThreadUtils.h"
+ #include "gfxPlatform.h"
++#include "mozilla/gfx/Logging.h"
+ 
+ #ifdef MOZ_WAYLAND
+ #  include "WaylandVsyncSource.h"
+@@ -37,6 +38,7 @@ void VsyncSource::NotifyVsync(const TimeStamp& aVsyncTimestamp,
+ 
+   // Notify our listeners, outside of the lock.
+   const VsyncEvent event(vsyncId, aVsyncTimestamp, aOutputTimestamp);
++  { static bool once=false; if(!once){once=true; gfxCriticalNote << "EL-Z2 source-tick disp=" << dispatchers.Length(); } }
+   for (const auto& dispatcher : dispatchers) {
+     dispatcher.mDispatcher->NotifyVsync(event);
+   }
+@@ -44,6 +46,7 @@ void VsyncSource::NotifyVsync(const TimeStamp& aVsyncTimestamp,
+ 
+ void VsyncSource::AddVsyncDispatcher(VsyncDispatcher* aVsyncDispatcher) {
+   MOZ_ASSERT(aVsyncDispatcher);
++  gfxCriticalNote << "EL-Y3 VS::AddDispatcher";
+   {
+     auto state = mState.Lock();
+ 
+@@ -116,6 +119,7 @@ void VsyncSource::UpdateVsyncStatus() {
+     auto state = mState.Lock();
+     enableVsync = !state->mDispatchers.IsEmpty();
+   }
++  gfxCriticalNote << "EL-Y4 VS enable=" << int(enableVsync);
+ 
+   if (enableVsync) {
+     EnableVsync();
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index cf0fdf4ada71..e4dd3812d514 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -128,12 +128,15 @@ RenderCompositorEGL::~RenderCompositorEGL() {
+ 
+ #ifdef MOZ_EMBEDLITE
+ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
++  gfxCriticalNote << "EL-E ensure entry";
+   MOZ_ASSERT(mUseEmbedLiteOffscreen);
+   const auto size = GetBufferSize().ToUnknownSize();
++  gfxCriticalNote << "EL-Ensure size " << size.width << "x" << size.height;
+   if (size.IsEmpty()) {
+     return false;
+   }
+   if (!gl()->MakeCurrent()) {
++    gfxCriticalNote << "EL-Ensure MakeCurrent failed";
+     return false;
+   }
+   if (gl()->Screen()) {
+@@ -143,6 +146,7 @@ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
+     return gl()->ResizeScreenBuffer(size);
+   }
+   if (!gl()->CreateOffscreenScreenBuffer(size)) {
++    gfxCriticalNote << "EL-Ensure CreateOffscreenScreenBuffer failed";
+     return false;
+   }
+   if (gl()->GetContextType() == gl::GLContextType::EGL) {
+@@ -151,6 +155,7 @@ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
+       gl()->Screen()->Morph(std::move(factory));
+       return true;
+     }
++    gfxCriticalNote << "EL-W factory FAILED (EGL)";
+     return false;
+   }
+   return false;
+@@ -158,6 +163,7 @@ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
+ #endif
+ 
+ bool RenderCompositorEGL::BeginFrame() {
++  gfxCriticalNote << "EL-D BF entry off=" << int(mUseEmbedLiteOffscreen);
+ #ifdef MOZ_EMBEDLITE
+   if (mUseEmbedLiteOffscreen && !EnsureEmbedLiteOffscreenTarget()) {
+     gfxCriticalNote << "Failed to prepare EmbedLite offscreen target.";
+@@ -273,7 +279,9 @@ bool RenderCompositorEGL::Resume() {
+ #ifdef MOZ_EMBEDLITE
+   if (mUseEmbedLiteOffscreen) {
+     DestroyEGLSurface();
+-    return EnsureEmbedLiteOffscreenTarget();
++    const bool elOk = EnsureEmbedLiteOffscreenTarget();
++    gfxCriticalNote << "EL-Resume ensure=" << elOk;
++    return elOk;
+   }
+ #endif
+   if (kIsAndroid) {
+diff --git a/gfx/webrender_bindings/RenderCompositorOGL.cpp b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+index a3cb63c84cbe..677bf04ec062 100644
+--- a/gfx/webrender_bindings/RenderCompositorOGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorOGL.cpp
+@@ -102,6 +102,7 @@ bool RenderCompositorOGL::BeginFrame() {
+               gl::SurfaceFactory_EGLImage::Create(*mGL)) {
+         mGL->Screen()->Morph(std::move(factory));
+       } else {
++        gfxCriticalNote << "EL-W factory FAILED (OGL)";
+         return false;
+       }
+     } else {
+diff --git a/gfx/webrender_bindings/RendererOGL.cpp b/gfx/webrender_bindings/RendererOGL.cpp
+index 5c0d691cba82..5f26e1f2ea44 100644
+--- a/gfx/webrender_bindings/RendererOGL.cpp
++++ b/gfx/webrender_bindings/RendererOGL.cpp
+@@ -195,6 +195,7 @@ RenderedFrameId RendererOGL::UpdateAndRender(
+       return RenderedFrameId();
+     }
+     needPostRenderCall = true;
++    gfxCriticalNote << "EL-A PreRender ok";
+ 
+     // XXX set clear color if MOZ_WIDGET_ANDROID is defined.
+ 
+@@ -204,7 +205,9 @@ RenderedFrameId RendererOGL::UpdateAndRender(
+       }
+     }
+ 
++    gfxCriticalNote << "EL-B call BeginFrame";
+     if (!mCompositor->BeginFrame()) {
++      gfxCriticalNote << "EL-C BeginFrame false";
+       beginFrame = false;
+     }
+ 
+diff --git a/layout/base/PresShell.cpp b/layout/base/PresShell.cpp
+index d6d77b6105ae..4cb92d4ef9f1 100644
+--- a/layout/base/PresShell.cpp
++++ b/layout/base/PresShell.cpp
+@@ -1640,6 +1640,7 @@ void PresShell::InitPaintSuppressionTimer() {
+ }
+ 
+ nsresult PresShell::Initialize() {
++  { static bool o8=false; if(!o8){o8=true; gfxCriticalNote << "EL-Z8 PresShell::Initialize#1"; } }
+   if (mIsDestroying) {
+     return NS_OK;
+   }
+@@ -4261,6 +4262,7 @@ void PresShell::CancelPaintSuppressionTimer() {
+ }
+ 
+ void PresShell::UnsuppressPainting() {
++  { static bool o9=false; if(!o9){o9=true; gfxCriticalNote << "EL-Z9 UnsuppressPainting#1"; } }
+   CancelPaintSuppressionTimer();
+ 
+   if (mIsDocumentGone || !mPaintingSuppressed) {
+diff --git a/layout/base/nsRefreshDriver.cpp b/layout/base/nsRefreshDriver.cpp
+index 2e624b2f71ba..3a8b655ff231 100644
+--- a/layout/base/nsRefreshDriver.cpp
++++ b/layout/base/nsRefreshDriver.cpp
+@@ -80,6 +80,10 @@
+ #include "mozilla/ipc/BackgroundChild.h"
+ #include "mozilla/ipc/PBackgroundChild.h"
+ #include "mozilla/layers/WebRenderLayerManager.h"
++#include "VsyncSource.h"
++#include "mozilla/gfx/Logging.h"
++#include "mozilla/VsyncDispatcher.h"
++#include "mozilla/Unused.h"
+ #include "nsAnimationManager.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsContentUtils.h"
+@@ -564,6 +568,7 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
+     }
+ 
+     void NotifyVsyncTimerOnMainThread() {
++      { static bool o1=false; if(!o1){o1=true; gfxCriticalNote << "EL-Z4a vsync on main"; } }
+       MOZ_ASSERT(NS_IsMainThread());
+ 
+       if (!mVsyncRefreshDriverTimer) {
+@@ -750,6 +755,7 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
+       }
+     }
+ 
++    { static bool o2=false; if(!o2){o2=true; gfxCriticalNote << "EL-Z4b ->TickRefreshDriver"; } }
+     TickRefreshDriver(aVsyncEvent.mId, aVsyncEvent.mTime);
+   }
+ 
+@@ -1187,6 +1193,7 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
+     if (widget) {
+       if (RefPtr<VsyncDispatcher> vsyncDispatcher =
+               widget->GetVsyncDispatcher()) {
++        gfxCriticalNote << "EL-Y0a RD widget-vd";
+         mOwnTimer = VsyncRefreshDriverTimer::
+             CreateForParentProcessWithLocalVsyncDispatcher(
+                 std::move(vsyncDispatcher));
+@@ -1209,6 +1216,7 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
+       // Make sure all vsync systems are ready.
+       gfxPlatform::GetPlatform();
+       // In parent process, we can create the VsyncRefreshDriverTimer directly.
++      gfxCriticalNote << "EL-Y0b RD global-vsync";
+       sRegularRateTimer =
+           VsyncRefreshDriverTimer::CreateForParentProcessWithGlobalVsync();
+     } else {
+@@ -2298,6 +2306,7 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
+   if (IsFrozen() || !mPresContext) {
+     return;
+   }
++  { static bool o3=false; if(!o3){o3=true; gfxCriticalNote << "EL-Z1 Driver::Tick obs=" << ObserverCount(); } }
+ 
+   // We can have a race condition where the vsync timestamp
+   // is before the most recent refresh due to a forced refresh.
+@@ -2626,15 +2635,18 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
+ 
+ bool nsRefreshDriver::PaintIfNeeded() {
+   if (mThrottled) {
++    { static bool a=false; if(!a){a=true; gfxCriticalNote << "EL-Z10 paint-blocked: throttled"; } }
+     return false;
+   }
+   if (IsPresentingInVR()) {
++    { static bool b=false; if(!b){b=true; gfxCriticalNote << "EL-Z11 paint-blocked: vr"; } }
+     // Skip the paint in immersive VR mode because whatever we paint here will
+     // not end up on the screen. The screen is displaying WebGL content from a
+     // single canvas in that mode.
+     return false;
+   }
+   if (mPresContext->Document()->IsRenderingSuppressed()) {
++    { static bool c=false; if(!c){c=true; gfxCriticalNote << "EL-Z12 paint-blocked: suppressed"; } }
+     // If the top level document is suppressed, skip painting altogether.
+     // TODO(emilio): Deal with this properly for subdocuments.
+     return false;
+@@ -2668,6 +2680,7 @@ bool nsRefreshDriver::PaintIfNeeded() {
+     if (nsXULPopupManager* pm = nsXULPopupManager::GetInstance()) {
+       pm->PaintPopups(this);
+     }
++    { static bool d=false; if(!d){d=true; gfxCriticalNote << "EL-Z13 PaintSynchronously!"; } }
+     ps->PaintSynchronously();
+   }
+   return true;
+diff --git a/widget/VsyncDispatcher.cpp b/widget/VsyncDispatcher.cpp
+index 7c9f452330dc..412203700d49 100644
+--- a/widget/VsyncDispatcher.cpp
++++ b/widget/VsyncDispatcher.cpp
+@@ -6,6 +6,7 @@
+ #include "VsyncDispatcher.h"
+ #include "VsyncSource.h"
+ #include "gfxPlatform.h"
++#include "mozilla/gfx/Logging.h"
+ #include "mozilla/layers/Compositor.h"
+ #include "mozilla/layers/CompositorBridgeParent.h"
+ #include "mozilla/layers/CompositorThread.h"
+@@ -192,6 +193,7 @@ void VsyncDispatcher::NotifyMainThreadObservers(VsyncEvent aEvent) {
+ 
+ void VsyncDispatcher::AddVsyncObserver(VsyncObserver* aVsyncObserver) {
+   MOZ_ASSERT(aVsyncObserver);
++  gfxCriticalNote << "EL-Y1 VD::AddObs";
+   {  // scope lock - called on PBackground thread or main thread
+     auto state = mState.Lock();
+     if (!state->mObservers.Contains(aVsyncObserver)) {
+@@ -204,6 +206,7 @@ void VsyncDispatcher::AddVsyncObserver(VsyncObserver* aVsyncObserver) {
+ 
+ void VsyncDispatcher::RemoveVsyncObserver(VsyncObserver* aVsyncObserver) {
+   MOZ_ASSERT(aVsyncObserver);
++  gfxCriticalNote << "EL-Z3 VD::RemoveObs";
+   {  // scope lock - called on PBackground thread or main thread
+     auto state = mState.Lock();
+     state->mObservers.RemoveElement(aVsyncObserver);
+@@ -251,6 +254,7 @@ void VsyncDispatcher::UpdateVsyncStatus() {
+   // Call Add/RemoveVsyncDispatcher outside the lock, because it can re-enter
+   // into VsyncDispatcher::NotifyVsync.
+   if (needVsync && !wasObservingVsync) {
++    gfxCriticalNote << "EL-Y2 VD observes source";
+     vsyncSource->AddVsyncDispatcher(this);
+   } else if (!needVsync && wasObservingVsync) {
+     vsyncSource->RemoveVsyncDispatcher(this);
+-- 
+2.56.0
+

@@ -1,0 +1,64 @@
+From c10eecd7fa53008d64d8a3c3ee62079c792a4a9d Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Thu, 27 Aug 2026 05:06:43 +0000
+Subject: [PATCH 146/156] dom: add nsIDOMWindowUtils.setEmbedderElement
+
+BrowsingContext::SetEmbedderElement is not scriptable and not exported, so
+embedders that render without a XUL <browser> have no way to attach one. The
+WebExtension code needs it: WebNavigation.fire, the tabs API and browserAction
+all read Top()->GetEmbedderElement() and give up when it is null.
+---
+ dom/base/nsDOMWindowUtils.cpp             | 14 ++++++++++++++
+ dom/interfaces/base/nsIDOMWindowUtils.idl | 11 +++++++++++
+ 2 files changed, 25 insertions(+)
+
+diff --git a/dom/base/nsDOMWindowUtils.cpp b/dom/base/nsDOMWindowUtils.cpp
+index b25bbc96aae1..22413cbf15d0 100644
+--- a/dom/base/nsDOMWindowUtils.cpp
++++ b/dom/base/nsDOMWindowUtils.cpp
+@@ -3702,6 +3702,20 @@ nsDOMWindowUtils::LoadSheetUsingURIString(const nsACString& aSheetURI,
+   return LoadSheet(uri, aSheetType);
+ }
+ 
++NS_IMETHODIMP
++nsDOMWindowUtils::SetEmbedderElement(Element* aElement) {
++  NS_ENSURE_ARG_POINTER(aElement);
++
++  nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
++  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
++
++  RefPtr<BrowsingContext> bc = window->GetBrowsingContext();
++  NS_ENSURE_TRUE(bc, NS_ERROR_FAILURE);
++
++  bc->Top()->SetEmbedderElement(aElement);
++  return NS_OK;
++}
++
+ NS_IMETHODIMP
+ nsDOMWindowUtils::AddSheet(nsIPreloadedStyleSheet* aSheet,
+                            uint32_t aSheetType) {
+diff --git a/dom/interfaces/base/nsIDOMWindowUtils.idl b/dom/interfaces/base/nsIDOMWindowUtils.idl
+index adacd5aaa73d..d15bb3aa7ea8 100644
+--- a/dom/interfaces/base/nsIDOMWindowUtils.idl
++++ b/dom/interfaces/base/nsIDOMWindowUtils.idl
+@@ -1760,6 +1760,17 @@ interface nsIDOMWindowUtils : nsISupports {
+    *
+    * Sheets added via this API take effect immediately on the document.
+    */
++  /**
++   * Make aElement the embedder element of this window's top browsing context.
++   *
++   * Gecko's WebExtension code reads Top()->GetEmbedderElement() in several
++   * places - WebNavigation.fire, the tabs API, browserAction - and gives up
++   * when it is null. Embedders that render without a XUL <browser> never have
++   * one, so those APIs stay silent for them. This lets such an embedder attach
++   * an element from a hidden chrome document instead.
++   */
++  void setEmbedderElement(in Element aElement);
++
+   void loadSheet(in nsIURI sheetURI, in unsigned long type);
+ 
+   /**
+-- 
+2.56.0
+

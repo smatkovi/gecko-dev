@@ -1,0 +1,51 @@
+From 95b53cd33668474c11358caf5ae27f33d9d1e399 Mon Sep 17 00:00:00 2001
+From: sm <sebstianmatkovich@gmail.com>
+Date: Fri, 21 Aug 2026 09:36:47 +0200
+Subject: [PATCH 086/156] nsBaseAppShell: CanBlockNativeEvents-Hook -
+ Frueh-Ausstieg in OnProcessNextEvent
+
+Auf Threads ohne native Event-Quelle (Qt-Shell ohne Dispatcher auf
+base::Thread) entfaellt Native-Verschraenkung samt DispatchDummyEvent;
+nsThread blockt ereignisbasiert auf seiner Condvar.
+---
+ widget/nsBaseAppShell.cpp | 6 ++++++
+ widget/nsBaseAppShell.h   | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/widget/nsBaseAppShell.cpp b/widget/nsBaseAppShell.cpp
+index 216e896ef156..4b4921df3c6b 100644
+--- a/widget/nsBaseAppShell.cpp
++++ b/widget/nsBaseAppShell.cpp
+@@ -225,6 +225,12 @@ nsBaseAppShell::OnProcessNextEvent(nsIThreadInternal* thr, bool mayWait) {
+       OnDispatchedEvent();  // in case we blocked it earlier
+   }
+ 
++  // EL-AS: Ohne native Event-Quelle keine Verschraenkung - kein Spin,
++  // kein DummyEvent; nsThread blockt ereignisbasiert und jedes Dispatch
++  // weckt ihn ueber die Thread-Condvar.
++  if (!CanBlockNativeEvents()) {
++    return NS_OK;
++  }
+   PRIntervalTime start = PR_IntervalNow();
+   PRIntervalTime limit = THREAD_EVENT_STARVATION_LIMIT;
+ 
+diff --git a/widget/nsBaseAppShell.h b/widget/nsBaseAppShell.h
+index 75db18dc3a2b..5570f4b333e7 100644
+--- a/widget/nsBaseAppShell.h
++++ b/widget/nsBaseAppShell.h
+@@ -77,6 +77,12 @@ class nsBaseAppShell : public nsIAppShell,
+    */
+   virtual bool ProcessNextNativeEvent(bool mayWait) = 0;
+ 
++  // EL-AS: Liefert false auf Threads ohne native Event-Quelle (z.B.
++  // EmbedLiteSubThread ohne Qt-Dispatcher). Dann verzichtet
++  // OnProcessNextEvent auf Native-Verschraenkung und DummyEvent und
++  // laesst nsThread ereignisbasiert auf seiner Condvar blocken.
++  virtual bool CanBlockNativeEvents() { return true; }
++
+   int32_t mSuspendNativeCount;
+   uint32_t mEventloopNestingLevel;
+ 
+-- 
+2.56.0
+

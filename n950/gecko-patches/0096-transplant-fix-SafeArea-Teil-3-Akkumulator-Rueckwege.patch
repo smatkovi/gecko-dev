@@ -1,0 +1,81 @@
+From d58e0248cf8523829d0b3f3618ac29b281012f3c Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 16:43:24 +0000
+Subject: [PATCH 096/156] transplant-fix: SafeArea Teil 3 - Akkumulator,
+ Rueckwege, new-Literal (Ader komplett)
+
+---
+ servo/components/style/custom_properties.rs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/servo/components/style/custom_properties.rs b/servo/components/style/custom_properties.rs
+index 3e1a6e54dd45..426f7621664d 100644
+--- a/servo/components/style/custom_properties.rs
++++ b/servo/components/style/custom_properties.rs
+@@ -2564,6 +2564,7 @@ fn substitute_references_if_needed_and_apply(
+                 substitution.last_token_type,
+             )));
+             value.attr_tainted |= substitution.attr_tainted;
++            value.safe_area_inset_usage |= substitution.safe_area_inset_usage;
+             substitution_functions.insert_attr(name, value);
+         },
+         SubstitutionFunctionKind::Env => unreachable!("Kind cannot be env."),
+@@ -2585,6 +2586,7 @@ impl<'a> Substitution<'a> {
+             first_token_type: v.first_token_type,
+             last_token_type: v.last_token_type,
+             attr_tainted,
++            safe_area_inset_usage: v.safe_area_inset_usage,
+         }
+     }
+ 
+@@ -2602,6 +2604,7 @@ impl<'a> Substitution<'a> {
+                 self.last_token_type,
+             )));
+             value.attr_tainted |= self.attr_tainted;
++            value.safe_area_inset_usage |= self.safe_area_inset_usage;
+             return Ok(value);
+         }
+         let taint = if self.attr_tainted {
+@@ -2615,6 +2618,7 @@ impl<'a> Substitution<'a> {
+         };
+         let mut v = compute_value(&self.css, url_data, registration, computed_context, taint)?;
+         v.attr_tainted |= self.attr_tainted;
++        v.safe_area_inset_usage |= self.safe_area_inset_usage;
+         Ok(v)
+     }
+ 
+@@ -2629,6 +2633,7 @@ impl<'a> Substitution<'a> {
+             first_token_type,
+             last_token_type,
+             attr_tainted,
++            safe_area_inset_usage: 0,
+         }
+     }
+ }
+@@ -2716,6 +2721,7 @@ fn do_substitute_chunk<'a>(
+     let mut next_token_type = first_token_type;
+     let mut cur_pos = start;
+     let mut attr_tainted = false;
++    let mut safe_area_inset_usage: u8 = 0;
+     while let Some(reference) = references.next_if(|reference| reference.end <= end) {
+         if reference.start != cur_pos {
+             substituted.push(
+@@ -2754,6 +2760,7 @@ fn do_substitute_chunk<'a>(
+                 .filter(|_| substitution.attr_tainted),
+         )?;
+         attr_tainted |= substitution.attr_tainted;
++        safe_area_inset_usage |= substitution.safe_area_inset_usage;
+         next_token_type = reference.next_token_type;
+         cur_pos = reference.end;
+     }
+@@ -2766,6 +2773,7 @@ fn do_substitute_chunk<'a>(
+             /* attr_taint */ None,
+         )?;
+     }
++    substituted.safe_area_inset_usage |= safe_area_inset_usage;
+     Ok(Substitution::from_value(substituted, attr_tainted))
+ }
+ 
+-- 
+2.56.0
+

@@ -1,0 +1,781 @@
+From fdbfb780ca93aaf0adf8cd295f6ab1dcd287d880 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 12:42:39 +0100
+Subject: [PATCH 156/156] webrender: every shader variant compiles as GLSL ES
+ 1.00
+
+All 49 GLES shader variants now compile and link in an OpenGL ES 2.0
+context (Mesa, ES 2.0 forced, no instancing extensions), next to the
+unchanged GL 3 (64) and ES 3 (49) variants.
+
+webrender_build rewrites each line of a Gles2 shader (rewrite_for_gles2,
+Gles2Rewriter): texelFetch and TEXEL_FETCH into texel-centre texture2D
+lookups with the size from a per-sampler sX_Size uniform it declares,
+TEX_SIZE/textureSize/TEX_SIZE_YUV into that uniform, integer samplers
+into float ones, integer attributes into float ones (aX_f), integer
+varyings into highp float ones that the vertex shader assigns converted
+and the fragment shader reads rounded, texture() into texture2D(), mix
+with a boolean selector, transpose, inverse and round into wr_* helpers,
+and out oFragColor into gl_FragColor; ES 2.0 fragment shaders enable
+GL_OES_standard_derivatives for fwidth.
+
+Shared shader changes, the same code for every version: no array
+returns or constructors (split composite geometry, border side colours,
+component transfer functions), switch case blocks without the extra
+braces switch2if left. The 1471 wrench reftests under GL 3 still give
+exactly the original results.
+
+wrench compile_shaders: WRENCH_SHADER_DUMP writes every variant's
+sources to a directory.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/blend.glsl              |  18 +-
+ gfx/wr/webrender/res/cs_border_segment.glsl  |  52 ++--
+ gfx/wr/webrender/res/cs_border_solid.glsl    |   3 +-
+ gfx/wr/webrender/res/cs_line_decoration.glsl |  26 +-
+ gfx/wr/webrender/res/cs_svg_filter_node.glsl |   6 +-
+ gfx/wr/webrender/res/ps_quad_gradient.glsl   |  25 +-
+ gfx/wr/webrender/res/ps_split_composite.glsl |  19 +-
+ gfx/wr/webrender_build/src/shader.rs         | 284 ++++++++++++++++++-
+ gfx/wr/wrench/src/compile_shaders.rs         |   5 +
+ 9 files changed, 349 insertions(+), 89 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/blend.glsl b/gfx/wr/webrender/res/blend.glsl
+index dc646870f290..9778cf1a26e0 100644
+--- a/gfx/wr/webrender/res/blend.glsl
++++ b/gfx/wr/webrender/res/blend.glsl
+@@ -147,33 +147,34 @@ vec4 ComponentTransfer(vec4 colora, vec4 vfuncs, highp int table_address) {
+     vec4 texel;
+ 
+     // Dynamically indexing a vector is buggy on some platforms, so use a temporary array
+-    int[4] funcs = int[4](int(vfuncs.r), int(vfuncs.g), int(vfuncs.b), int(vfuncs.a));
++    int funcs[4];
++    funcs[0] = int(vfuncs.r);
++    funcs[1] = int(vfuncs.g);
++    funcs[2] = int(vfuncs.b);
++    funcs[3] = int(vfuncs.a);
+     for (int i = 0; i < 4; i++) {
+         {
+             int wr_switch_6 = int(funcs[i]);
+             if (wr_switch_6 == (COMPONENT_TRANSFER_IDENTITY)) {
+-            } else if (wr_switch_6 == (COMPONENT_TRANSFER_TABLE) || wr_switch_6 == (COMPONENT_TRANSFER_DISCRETE)) { {
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_TABLE) || wr_switch_6 == (COMPONENT_TRANSFER_DISCRETE)) {
+                 // fetch value from lookup table
+                 k = int(floor(colora[i]*255.0 + 0.5));
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset + k/4);
+                 colora[i] = clamp(texel[WR_MOD(k, 4)], 0.0, 1.0);
+                 // offset plus 256/4 blocks
+                 offset = offset + 64;
+-}
+-            } else if (wr_switch_6 == (COMPONENT_TRANSFER_LINEAR)) { {
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_LINEAR)) {
+                 // fetch the two values for use in the linear equation
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset);
+                 colora[i] = clamp(texel[0] * colora[i] + texel[1], 0.0, 1.0);
+                 // offset plus 1 block
+                 offset = offset + 1;
+-}
+-            } else if (wr_switch_6 == (COMPONENT_TRANSFER_GAMMA)) { {
++            } else if (wr_switch_6 == (COMPONENT_TRANSFER_GAMMA)) {
+                 // fetch the three values for use in the gamma equation
+                 texel = fetch_from_gpu_buffer_1f(table_address + offset);
+                 colora[i] = clamp(texel[0] * pow(colora[i], texel[1]) + texel[2], 0.0, 1.0);
+                 // offset plus 1 block
+                 offset = offset + 1;
+-}
+             } else {
+                 // shouldn't happen
+             }
+@@ -209,13 +210,12 @@ void CalculateFilter(
+             color = SrgbToLinear(color);
+         } else if (wr_switch_7 == (FILTER_LINEAR_TO_SRGB)) {
+             color = LinearToSrgb(color);
+-        } else if (wr_switch_7 == (FILTER_COMPONENT_TRANSFER)) { {
++        } else if (wr_switch_7 == (FILTER_COMPONENT_TRANSFER)) {
+             // Get the unpremultiplied color with alpha.
+             vec4 colora = vec4(color, alpha);
+             colora = ComponentTransfer(colora, v_funcs, table_address);
+             color = colora.rgb;
+             alpha = colora.a;
+-}
+         } else if (wr_switch_7 == (FILTER_FLOOD)) {
+             color = color_offset.rgb;
+             alpha = color_offset.a;
+diff --git a/gfx/wr/webrender/res/cs_border_segment.glsl b/gfx/wr/webrender/res/cs_border_segment.glsl
+index 745704f903f1..90607ff6c548 100644
+--- a/gfx/wr/webrender/res/cs_border_segment.glsl
++++ b/gfx/wr/webrender/res/cs_border_segment.glsl
+@@ -128,26 +128,22 @@ vec4 mod_color(vec4 color, bool is_black, bool lighter) {
+     return vec4(color.rgb * dark_scale, color.a);
+ }
+ 
+-vec4[2] get_colors_for_side(vec4 color, int style) {
+-    vec4 result[2];
+-
++void get_colors_for_side(vec4 color, int style, out vec4 result0, out vec4 result1) {
+     bool is_black = color.rgb == vec3(0.0, 0.0, 0.0);
+ 
+     {
+         int wr_switch_17 = int(style);
+         if (wr_switch_17 == (BORDER_STYLE_GROOVE)) {
+-            result[0] = mod_color(color, is_black, true);
+-            result[1] = mod_color(color, is_black, false);
++            result0 = mod_color(color, is_black, true);
++            result1 = mod_color(color, is_black, false);
+         } else if (wr_switch_17 == (BORDER_STYLE_RIDGE)) {
+-            result[0] = mod_color(color, is_black, false);
+-            result[1] = mod_color(color, is_black, true);
++            result0 = mod_color(color, is_black, false);
++            result1 = mod_color(color, is_black, true);
+         } else {
+-            result[0] = color;
+-            result[1] = color;
++            result0 = color;
++            result1 = color;
+         }
+     }
+-
+-    return result;
+ }
+ 
+ void main(void) {
+@@ -193,12 +189,13 @@ void main(void) {
+     vPartialWidths = vec4(aWidths / 3.0, aWidths / 2.0);
+     vPos = size * aPosition.xy;
+ 
+-    vec4[2] color0 = get_colors_for_side(aColor0, style0);
+-    vColor00 = color0[0];
+-    vColor01 = color0[1];
+-    vec4[2] color1 = get_colors_for_side(aColor1, style1);
+-    vColor10 = color1[0];
+-    vColor11 = color1[1];
++    vec4 color00, color01, color10, color11;
++    get_colors_for_side(aColor0, style0, color00, color01);
++    vColor00 = color00;
++    vColor01 = color01;
++    get_colors_for_side(aColor1, style1, color10, color11);
++    vColor10 = color10;
++    vColor11 = color11;
+     vClipCenter_Sign = vec4(outer + clip_sign * aRadii, clip_sign);
+     vClipRadii = vec4(aRadii, max(aRadii - aWidths, 0.0));
+     vColorLine = vec4(outer, aWidths.y * -clip_sign.y, aWidths.x * clip_sign.x);
+@@ -248,7 +245,7 @@ vec4 evaluate_color_for_style_in_corner(
+ ) {
+     {
+         int wr_switch_8 = int(style);
+-        if (wr_switch_8 == (BORDER_STYLE_DOUBLE)) { {
++        if (wr_switch_8 == (BORDER_STYLE_DOUBLE)) {
+             // Get the distances from 0.33 of the radii, and
+             // also 0.67 of the radii. Use these to form a
+             // SDF subtraction which will clip out the inside
+@@ -263,8 +260,7 @@ vec4 evaluate_color_for_style_in_corner(
+             );
+             float d = min(-d_radii_a, d_radii_b);
+             color0 *= distance_aa(aa_range, d);
+-}
+-        } else if (wr_switch_8 == (BORDER_STYLE_GROOVE) || wr_switch_8 == (BORDER_STYLE_RIDGE)) { {
++        } else if (wr_switch_8 == (BORDER_STYLE_GROOVE) || wr_switch_8 == (BORDER_STYLE_RIDGE)) {
+             float d = distance_to_ellipse(
+                 clip_relative_pos,
+                 clip_radii.xy - vPartialWidths.zw
+@@ -283,7 +279,6 @@ vec4 evaluate_color_for_style_in_corner(
+             vec4 c0 = mix(color1, color0, swizzled_factor);
+             vec4 c1 = mix(color0, color1, swizzled_factor);
+             color0 = mix(c0, c1, alpha);
+-}
+         } else {
+         }
+     }
+@@ -303,7 +298,7 @@ vec4 evaluate_color_for_style_in_edge(
+     float pos = dot(pos_vec, edge_axis);
+     {
+         int wr_switch_9 = int(style);
+-        if (wr_switch_9 == (BORDER_STYLE_DOUBLE)) { {
++        if (wr_switch_9 == (BORDER_STYLE_DOUBLE)) {
+             float d = -1.0;
+             float partial_width = dot(vPartialWidths.xy, edge_axis);
+             if (partial_width >= 1.0) {
+@@ -314,13 +309,11 @@ vec4 evaluate_color_for_style_in_edge(
+                 d = min(pos - ref.x, ref.y - pos);
+             }
+             color0 *= distance_aa(aa_range, d);
+-}
+-        } else if (wr_switch_9 == (BORDER_STYLE_GROOVE) || wr_switch_9 == (BORDER_STYLE_RIDGE)) { {
++        } else if (wr_switch_9 == (BORDER_STYLE_GROOVE) || wr_switch_9 == (BORDER_STYLE_RIDGE)) {
+             float ref = dot(vEdgeReference.xy + vPartialWidths.zw, edge_axis);
+             float d = pos - ref;
+             float alpha = distance_aa(aa_range, d);
+             color0 = mix(color0, color1, alpha);
+-}
+         } else {
+         }
+     }
+@@ -350,11 +343,10 @@ void main(void) {
+ 
+     {
+         int wr_switch_10 = int(clip_mode);
+-        if (wr_switch_10 == (CLIP_DOT)) { {
++        if (wr_switch_10 == (CLIP_DOT)) {
+             // Set clip distance based or dot position and radius.
+             d = distance(vClipParams1.xy, vPos) - vClipParams1.z;
+-}
+-        } else if (wr_switch_10 == (CLIP_DASH_EDGE)) { {
++        } else if (wr_switch_10 == (CLIP_DASH_EDGE)) {
+             bool is_vertical = vClipParams1.x == 0.;
+             float half_dash = is_vertical ? vClipParams1.y : vClipParams1.x;
+             // We want to draw something like:
+@@ -366,8 +358,7 @@ void main(void) {
+             if (!in_dash) {
+                 d = 1.;
+             }
+-}
+-        } else if (wr_switch_10 == (CLIP_DASH_CORNER)) { {
++        } else if (wr_switch_10 == (CLIP_DASH_CORNER)) {
+             // Get SDF for the two line/tangent clip lines,
+             // do SDF subtract to get clip distance.
+             float d0 = distance_to_line(vClipParams1.xy,
+@@ -377,7 +368,6 @@ void main(void) {
+                                         vClipParams2.zw,
+                                         vPos);
+             d = max(d0, -d1);
+-}
+         } else {
+         }
+     }
+diff --git a/gfx/wr/webrender/res/cs_border_solid.glsl b/gfx/wr/webrender/res/cs_border_solid.glsl
+index b50e7982a404..c690a65ee0b6 100644
+--- a/gfx/wr/webrender/res/cs_border_solid.glsl
++++ b/gfx/wr/webrender/res/cs_border_solid.glsl
+@@ -90,9 +90,8 @@ void main(void) {
+     int mix_colors;
+     {
+         int wr_switch_5 = int(segment);
+-        if (wr_switch_5 == (SEGMENT_TOP_LEFT) || wr_switch_5 == (SEGMENT_TOP_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_LEFT)) { {
++        if (wr_switch_5 == (SEGMENT_TOP_LEFT) || wr_switch_5 == (SEGMENT_TOP_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_RIGHT) || wr_switch_5 == (SEGMENT_BOTTOM_LEFT)) {
+             mix_colors = do_aa ? MIX_AA : MIX_NO_AA;
+-}
+         } else {
+             mix_colors = DONT_MIX;
+         }
+diff --git a/gfx/wr/webrender/res/cs_line_decoration.glsl b/gfx/wr/webrender/res/cs_line_decoration.glsl
+index be3b25950599..37cb08e4f42e 100644
+--- a/gfx/wr/webrender/res/cs_line_decoration.glsl
++++ b/gfx/wr/webrender/res/cs_line_decoration.glsl
+@@ -46,15 +46,14 @@ void main(void) {
+ 
+     {
+         int wr_switch_3 = int(vStyle.x);
+-        if (wr_switch_3 == (LINE_STYLE_SOLID)) { {
+-}
+-        } else if (wr_switch_3 == (LINE_STYLE_DASHED)) { {
++        if (wr_switch_3 == (LINE_STYLE_SOLID)) {
++
++        } else if (wr_switch_3 == (LINE_STYLE_DASHED)) {
+             vParams = vec4(size.x,          // period
+                            0.5 * size.x,    // dash length
+                            0.0,
+                            0.0);
+-}
+-        } else if (wr_switch_3 == (LINE_STYLE_DOTTED)) { {
++        } else if (wr_switch_3 == (LINE_STYLE_DOTTED)) {
+             float diameter = size.y;
+             float period = diameter * 2.0;
+             float center_line = 0.5 * size.y;
+@@ -62,8 +61,7 @@ void main(void) {
+                            diameter / 2.0, // radius
+                            center_line,
+                            0.0);
+-}
+-        } else if (wr_switch_3 == (LINE_STYLE_WAVY)) { {
++        } else if (wr_switch_3 == (LINE_STYLE_WAVY)) {
+             // This logic copied from gecko to get the same results
+             float line_thickness = max(aWavyLineThickness, 1.0);
+             // Difference in height between peaks and troughs
+@@ -76,7 +74,6 @@ void main(void) {
+                            slope_length,
+                            flat_length,
+                            size.y);
+-}
+         } else {
+             vParams = vec4(0.0);
+         }
+@@ -100,19 +97,17 @@ void main(void) {
+ 
+     {
+         int wr_switch_4 = int(vStyle.x);
+-        if (wr_switch_4 == (LINE_STYLE_SOLID)) { {
+-}
+-        } else if (wr_switch_4 == (LINE_STYLE_DASHED)) { {
++        if (wr_switch_4 == (LINE_STYLE_SOLID)) {
++
++        } else if (wr_switch_4 == (LINE_STYLE_DASHED)) {
+             // Calculate dash alpha (on/off) based on dash length
+             alpha = step(floor(pos.x + 0.5), vParams.y);
+-}
+-        } else if (wr_switch_4 == (LINE_STYLE_DOTTED)) { {
++        } else if (wr_switch_4 == (LINE_STYLE_DOTTED)) {
+             // Get the dot alpha
+             vec2 dot_relative_pos = pos - vParams.yz;
+             float dot_distance = length(dot_relative_pos) - vParams.y;
+             alpha = distance_aa(aa_range, dot_distance);
+-}
+-        } else if (wr_switch_4 == (LINE_STYLE_WAVY)) { {
++        } else if (wr_switch_4 == (LINE_STYLE_WAVY)) {
+             float half_line_thickness = vParams.x;
+             float slope_length = vParams.y;
+             float flat_length = vParams.z;
+@@ -150,7 +145,6 @@ void main(void) {
+             if (half_line_thickness <= 1.0) {
+                 alpha = 1.0 - step(alpha, MAGIC_WAVY_LINE_AA_SNAP);
+             }
+-}
+         } else {
+         }
+     }
+diff --git a/gfx/wr/webrender/res/cs_svg_filter_node.glsl b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+index 5310d5449337..ebab63742165 100644
+--- a/gfx/wr/webrender/res/cs_svg_filter_node.glsl
++++ b/gfx/wr/webrender/res/cs_svg_filter_node.glsl
+@@ -232,16 +232,14 @@ void main(void) {
+             vFloat0.x = aFilterInput2ContentScaleAndOffset.x;
+         } else if (wr_switch_2 == (FILTER_TO_ALPHA) || wr_switch_2 == (FILTER_TO_ALPHA_CONVERTSRGB)) {
+         } else if (wr_switch_2 == (FILTER_BLEND_COLOR) || wr_switch_2 == (FILTER_BLEND_COLOR_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN) || wr_switch_2 == (FILTER_BLEND_COLOR_BURN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE) || wr_switch_2 == (FILTER_BLEND_COLOR_DODGE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DARKEN) || wr_switch_2 == (FILTER_BLEND_DARKEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE) || wr_switch_2 == (FILTER_BLEND_DIFFERENCE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_EXCLUSION) || wr_switch_2 == (FILTER_BLEND_EXCLUSION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT) || wr_switch_2 == (FILTER_BLEND_HARD_LIGHT_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_HUE) || wr_switch_2 == (FILTER_BLEND_HUE_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LIGHTEN) || wr_switch_2 == (FILTER_BLEND_LIGHTEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY) || wr_switch_2 == (FILTER_BLEND_LUMINOSITY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_MULTIPLY) || wr_switch_2 == (FILTER_BLEND_MULTIPLY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_NORMAL) || wr_switch_2 == (FILTER_BLEND_NORMAL_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_OVERLAY) || wr_switch_2 == (FILTER_BLEND_OVERLAY_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SATURATION) || wr_switch_2 == (FILTER_BLEND_SATURATION_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SCREEN) || wr_switch_2 == (FILTER_BLEND_SCREEN_CONVERTSRGB) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT) || wr_switch_2 == (FILTER_BLEND_SOFT_LIGHT_CONVERTSRGB)) {
+-        } else if (wr_switch_2 == (FILTER_COLOR_MATRIX) || wr_switch_2 == (FILTER_COLOR_MATRIX_CONVERTSRGB)) { {
++        } else if (wr_switch_2 == (FILTER_COLOR_MATRIX) || wr_switch_2 == (FILTER_COLOR_MATRIX_CONVERTSRGB)) {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
+             WR_GPU_BUFFER_FETCH_DIRECT_4(mat_data, gpu_buffer_uv);
+             vColorMat = mat4(mat_data[0], mat_data[1], mat_data[2], mat_data[3]);
+             vFilterData0 = fetch_from_gpu_buffer_1f_direct(gpu_buffer_uv + ivec2(4, 0));
+-}
+-        } else if (wr_switch_2 == (FILTER_COMPONENT_TRANSFER) || wr_switch_2 == (FILTER_COMPONENT_TRANSFER_CONVERTSRGB)) { {
++        } else if (wr_switch_2 == (FILTER_COMPONENT_TRANSFER) || wr_switch_2 == (FILTER_COMPONENT_TRANSFER_CONVERTSRGB)) {
+             ivec2 gpu_buffer_uv = get_gpu_buffer_uv(aFilterExtraDataAddress);
+             vData = ivec4(gpu_buffer_uv, 0, 0);
+-}
+         } else if (wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC) || wr_switch_2 == (FILTER_COMPOSITE_ARITHMETIC_CONVERTSRGB)) {
+             // arithmetic parameters
+             vFilterData0 = fetch_from_gpu_buffer_1f(aFilterExtraDataAddress);
+diff --git a/gfx/wr/webrender/res/ps_quad_gradient.glsl b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+index 1752c6c36cfe..26bd6b6364a1 100644
+--- a/gfx/wr/webrender/res/ps_quad_gradient.glsl
++++ b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+@@ -107,20 +107,16 @@ void pattern_vertex(PrimitiveInfo info) {
+ 
+     {
+         int wr_switch_0 = int(header.x);
+-        if (wr_switch_0 == (GRADIENT_KIND_LINEAR)) { {
++        if (wr_switch_0 == (GRADIENT_KIND_LINEAR)) {
+             linear_gradient_vertex(info.local_pos, gradient[0]);
+-}
+-        } else if (wr_switch_0 == (GRADIENT_KIND_RADIAL)) { {
++        } else if (wr_switch_0 == (GRADIENT_KIND_RADIAL)) {
+             radial_gradient_vertex(info.local_pos, gradient[0], gradient[1]);
+-}
+-        } else if (wr_switch_0 == (GRADIENT_KIND_CONIC)) { {
++        } else if (wr_switch_0 == (GRADIENT_KIND_CONIC)) {
+             conic_gradient_vertex(info.local_pos, gradient[0], gradient[1]);
+-}
+-        } else { {
++        } else {
+             // This should be dead code.
+             v_interpolated_data = vec4(0.0);
+             v_flat_data = vec4(0.0);
+-}
+         }
+     }
+ 
+@@ -334,17 +330,14 @@ vec4 pattern_fragment(vec4 color) {
+     float offset = 0.0;
+     {
+         int wr_switch_1 = int(v_gradient_header.x);
+-        if (wr_switch_1 == (GRADIENT_KIND_LINEAR)) { {
++        if (wr_switch_1 == (GRADIENT_KIND_LINEAR)) {
+             offset = linear_gradient_fragment();
+-}
+-        } else if (wr_switch_1 == (GRADIENT_KIND_RADIAL)) { {
++        } else if (wr_switch_1 == (GRADIENT_KIND_RADIAL)) {
+             offset = radial_gradient_fragment();
+-}
+-        } else if (wr_switch_1 == (GRADIENT_KIND_CONIC)) { {
++        } else if (wr_switch_1 == (GRADIENT_KIND_CONIC)) {
+             offset = conic_gradient_fragment();
+-}
+-        } else { {
+-}
++        } else {
++
+         }
+     }
+ 
+diff --git a/gfx/wr/webrender/res/ps_split_composite.glsl b/gfx/wr/webrender/res/ps_split_composite.glsl
+index f3ca3d89590e..d926896b6011 100644
+--- a/gfx/wr/webrender/res/ps_split_composite.glsl
++++ b/gfx/wr/webrender/res/ps_split_composite.glsl
+@@ -17,19 +17,20 @@ flat varying highp vec4 vUvSampleBounds;
+ 
+ #ifdef WR_VERTEX_SHADER
+ struct SplitGeometry {
+-    vec2 local[4];
++    vec2 local0;
++    vec2 local1;
++    vec2 local2;
++    vec2 local3;
+ };
+ 
+ SplitGeometry fetch_split_geometry(int address) {
+     WR_GPU_BUFFER_FETCH_2(data, address);
+ 
+     SplitGeometry geo;
+-    geo.local = vec2[4](
+-        data[0].xy,
+-        data[0].zw,
+-        data[1].xy,
+-        data[1].zw
+-    );
++    geo.local0 = data[0].xy;
++    geo.local1 = data[0].zw;
++    geo.local2 = data[1].xy;
++    geo.local3 = data[1].zw;
+ 
+     return geo;
+ }
+@@ -70,8 +71,8 @@ void main(void) {
+     vec2 dest_origin = dest_task.task_rect.p0 -
+                        dest_task.content_origin;
+ 
+-    vec2 local_pos = bilerp(geometry.local[0], geometry.local[1],
+-                            geometry.local[3], geometry.local[2],
++    vec2 local_pos = bilerp(geometry.local0, geometry.local1,
++                            geometry.local3, geometry.local2,
+                             aPosition.y, aPosition.x);
+     vec4 world_pos = transform.m * vec4(local_pos, 0.0, 1.0);
+ 
+diff --git a/gfx/wr/webrender_build/src/shader.rs b/gfx/wr/webrender_build/src/shader.rs
+index 6e1a0cf45265..7946e06fca9e 100644
+--- a/gfx/wr/webrender_build/src/shader.rs
++++ b/gfx/wr/webrender_build/src/shader.rs
+@@ -157,7 +157,280 @@ pub fn do_build_shader_string<F: FnMut(&str), G: Fn(&str) -> Cow<'static, str>>(
+    mut output: F,
+ ) {
+    build_shader_prefix_string(gl_version, features, kind, base_filename, &mut output);
+-   build_shader_main_string(base_filename, get_source, &mut output);
++   if gl_version == ShaderVersion::Gles2 {
++       let mut rewriter = Gles2Rewriter::new(kind);
++       build_shader_main_string(base_filename, get_source, &mut |s: &str| {
++           output(&rewriter.rewrite(s))
++       });
++   } else {
++       build_shader_main_string(base_filename, get_source, &mut output);
++   }
++}
++
++/// The GLSL ES 1.00 rewrite of one shader, line by line: rewrite_for_gles2,
++/// plus integer varyings, which ESSL 1 does not allow. Each becomes a highp
++/// float varying `name_f`; vertex shader assignments to it are converted,
++/// and reads round it back (`name` is defined as the rounded integer).
++struct Gles2Rewriter {
++    kind: ShaderKind,
++    int_varyings: Vec<(String, &'static str)>,
++    open_assignment: Option<i32>,
++}
++
++impl Gles2Rewriter {
++    fn new(kind: ShaderKind) -> Self {
++        Gles2Rewriter { kind, int_varyings: Vec::new(), open_assignment: None }
++    }
++
++    fn rewrite(&mut self, line: &str) -> String {
++        if line == "\n" {
++            return line.to_string();
++        }
++        if let Some(depth) = self.open_assignment {
++            let (out, state) = close_conversion(&rewrite_for_gles2(line), depth);
++            self.open_assignment = state;
++            return out;
++        }
++        let trimmed = line.trim();
++        if trimmed == "out vec4 oFragColor;" {
++            return "#define oFragColor gl_FragColor".to_string();
++        }
++        let words: Vec<&str> = trimmed.trim_end_matches(';').split_whitespace().collect();
++        if trimmed.ends_with(';') && words.contains(&"varying") {
++            let ty = words[words.len() - 2];
++            let name = words[words.len() - 1];
++            let float_ty = match ty {
++                "int" => Some("float"),
++                "ivec2" => Some("vec2"),
++                "ivec3" => Some("vec3"),
++                "ivec4" => Some("vec4"),
++                _ => None,
++            };
++            if let Some(float_ty) = float_ty {
++                self.int_varyings.push((name.to_string(), float_ty));
++                return format!(
++                    "varying highp {} {}_f;\n#define {} {}(floor({}_f + 0.5))",
++                    float_ty, name, name, ty, name
++                );
++            }
++        }
++        if self.kind == ShaderKind::Vertex {
++            if let Some(out) = self.open_assignment_to_varying(line) {
++                return out;
++            }
++        }
++        rewrite_for_gles2(line)
++    }
++
++    /// `v = ...;` or `v.xy = ...;` to an integer varying: `v_f = vecN(...);`
++    fn open_assignment_to_varying(&mut self, line: &str) -> Option<String> {
++        let trimmed = line.trim_start();
++        let indent = &line[..line.len() - trimmed.len()];
++        for (name, float_ty) in &self.int_varyings {
++            let Some(after) = trimmed.strip_prefix(name.as_str()) else { continue };
++            let (swizzle, after) = match after.strip_prefix('.') {
++                Some(rest) => {
++                    let sw = leading_ident(rest);
++                    (format!(".{}", sw), &rest[sw.len()..])
++                }
++                None => (String::new(), after),
++            };
++            if after.starts_with(|c: char| is_ident_char(c)) {
++                continue;
++            }
++            let Some(rhs) = after.trim_start().strip_prefix('=') else { continue };
++            if rhs.starts_with('=') {
++                continue;
++            }
++            let ty = match swizzle.len() {
++                0 => float_ty.to_string(),
++                2 => "float".to_string(),
++                n => format!("vec{}", n - 1),
++            };
++            let head = format!("{}{}_f{} = {}(", indent, name, swizzle, ty);
++            let (rest, state) = close_conversion(&rewrite_for_gles2(rhs.trim_start()), 0);
++            self.open_assignment = state;
++            return Some(format!("{}{}", head, rest));
++        }
++        None
++    }
++
++}
++
++/// Closes a conversion `vecN(` opened before `s` at the semicolon that ends
++/// the statement; `depth` counts the parentheses still open. Returns the
++/// line and, while the statement goes on, the depth for the next line.
++fn close_conversion(s: &str, mut depth: i32) -> (String, Option<i32>) {
++    let mut out = String::new();
++    let mut closed = false;
++    for c in s.chars() {
++        if !closed {
++            match c {
++                '(' => depth += 1,
++                ')' => depth -= 1,
++                ';' if depth == 0 => {
++                    out.push(')');
++                    closed = true;
++                }
++                _ => {}
++            }
++        }
++        out.push(c);
++    }
++    (out, if closed { None } else { Some(depth) })
++}
++
++fn is_ident_char(c: char) -> bool {
++    c.is_ascii_alphanumeric() || c == '_'
++}
++
++/// The identifier at the start of `s`.
++fn leading_ident(s: &str) -> &str {
++    let end = s.find(|c: char| !is_ident_char(c)).unwrap_or(s.len());
++    &s[..end]
++}
++
++/// GLSL ES 1.00 has no texelFetch, no textureSize, no integer samplers and
++/// no token pasting. Rewrites, per line, `TEXEL_FETCH(sX, ...)` and
++/// `texelFetch(sX, ...)` into texel-centre texture2D lookups that take the
++/// texture size from a `sX_Size` uniform, `TEX_SIZE(sX)` into that uniform,
++/// and integer samplers into float ones (whose texels hold exact integers);
++/// declares `sX_Size` next to each sampler.
++pub fn rewrite_for_gles2(line: &str) -> String {
++    let trimmed = line.trim_start();
++    if trimmed.starts_with("//") {
++        return line.to_string();
++    }
++    let mut out = replace_word(line, "isampler2D", "sampler2D");
++    for (from, to) in [
++        ("texture(", "texture2D("),
++        ("mix(", "wr_mix("),
++        ("transpose(", "wr_transpose("),
++        ("inverse(", "wr_inverse("),
++        ("round(", "wr_round("),
++    ] {
++        out = replace_call(&out, from, to);
++    }
++    if trimmed.starts_with("#define") {
++        return out;
++    }
++    for (call, macro_name) in [
++        ("TEXEL_FETCH(", "WR_TEXEL_FETCH"),
++        ("texelFetch(", "WR_TEXEL_FETCH1"),
++    ] {
++        out = rewrite_calls(&out, call, |sampler, args| {
++            let suffix = if sampler.ends_with('I') { "_I" } else { "" };
++            format!("{}{}({}, {}_Size{})", macro_name, suffix, sampler, sampler, args)
++        });
++    }
++    for call in ["TEX_SIZE(", "textureSize("] {
++        out = rewrite_calls(&out, call, |sampler, _| format!("ivec2({}_Size)", sampler));
++    }
++    out = rewrite_calls(&out, "TEX_SIZE_YUV(", |sampler, _| format!("vec2({}_Size)", sampler));
++    let decl = out.trim();
++    if decl.starts_with("uniform ") && decl.contains("sampler2D") {
++        if let Some(name) = decl.strip_suffix(';').and_then(|d| d.split_whitespace().last()) {
++            out = format!("{}\nuniform highp vec2 {}_Size;", out, name);
++        }
++    } else if let Some(attr) = decl
++        .strip_prefix("PER_INSTANCE ")
++        .unwrap_or(decl)
++        .strip_prefix("attribute ")
++    {
++        let mut parts = attr.trim_end_matches(';').split_whitespace();
++        if let (Some(ty), Some(name)) = (parts.next(), parts.next()) {
++            let float_ty = match ty {
++                "int" | "uint" => Some("float"),
++                "ivec2" | "uvec2" => Some("vec2"),
++                "ivec3" | "uvec3" => Some("vec3"),
++                "ivec4" | "uvec4" => Some("vec4"),
++                _ => None,
++            };
++            if let Some(float_ty) = float_ty {
++                let int_ty = match float_ty {
++                    "float" => "int".to_string(),
++                    vec => format!("i{}", vec),
++                };
++                out = format!(
++                    "attribute {} {}_f;\n#define {} {}({}_f)",
++                    float_ty, name, name, int_ty, name
++                );
++            }
++        }
++    }
++    out
++}
++
++/// Replaces the identifier `from` by `to`.
++fn replace_word(s: &str, from: &str, to: &str) -> String {
++    let mut result = String::new();
++    let mut rest = s;
++    while let Some(pos) = rest.find(from) {
++        let before = rest[..pos].chars().last().map_or(false, is_ident_char);
++        let after = rest[pos + from.len()..].chars().next().map_or(false, is_ident_char);
++        result.push_str(&rest[..pos]);
++        result.push_str(if before || after { from } else { to });
++        rest = &rest[pos + from.len()..];
++    }
++    result.push_str(rest);
++    result
++}
++
++/// Replaces calls `from` (ending in an opening parenthesis) by `to`.
++fn replace_call(s: &str, from: &str, to: &str) -> String {
++    let mut result = String::new();
++    let mut rest = s;
++    while let Some(pos) = rest.find(from) {
++        let before = rest[..pos].chars().last().map_or(false, |c| is_ident_char(c) || c == '.');
++        result.push_str(&rest[..pos]);
++        result.push_str(if before { from } else { to });
++        rest = &rest[pos + from.len()..];
++    }
++    result.push_str(rest);
++    result
++}
++
++/// Rewrites calls `call(sampler...)` whose first argument is an identifier;
++/// `f` gets the sampler and the rest of the arguments up to the closing
++/// parenthesis (with their leading comma).
++fn rewrite_calls<F: Fn(&str, &str) -> String>(s: &str, call: &str, f: F) -> String {
++    let mut result = String::new();
++    let mut rest = s;
++    while let Some(pos) = rest.find(call) {
++        let before = rest[..pos].chars().last().map_or(false, is_ident_char);
++        result.push_str(&rest[..pos]);
++        let after = &rest[pos + call.len()..];
++        let sampler = leading_ident(after.trim_start());
++        let mut depth = 1;
++        let mut close = None;
++        for (i, c) in after.char_indices() {
++            match c {
++                '(' => depth += 1,
++                ')' => {
++                    depth -= 1;
++                    if depth == 0 {
++                        close = Some(i);
++                        break;
++                    }
++                }
++                _ => {}
++            }
++        }
++        match close {
++            Some(close) if !before && !sampler.is_empty() => {
++                let inner = after[..close].trim_start();
++                let args = &inner[sampler.len()..];
++                result.push_str(&f(sampler, args));
++                rest = &after[close + 1..];
++            }
++            _ => {
++                result.push_str(call);
++                rest = after;
++            }
++        }
++    }
++    result.push_str(rest);
++    result
+ }
+ 
+ /// Walks the prefix section of the shader string, which manages the various
+@@ -181,6 +454,9 @@ pub fn build_shader_prefix_string<F: FnMut(&str)>(
+     // texelFetch, no bit operations), next to the GLSL ES 1.00 syntax that
+     // __VERSION__ == 100 already selects
+     if gl_version == ShaderVersion::Gles2 {
++        if kind == ShaderKind::Fragment {
++            output("#extension GL_OES_standard_derivatives : enable\n");
++        }
+         output("#define WR_GLES2\n");
+     }
+ 
+@@ -223,7 +499,11 @@ pub fn build_shader_prefix_string<F: FnMut(&str)>(
+     // Define a constant for the vertex texture width.
+     output("#define WR_MAX_VERTEX_TEXTURE_WIDTH ");
+     output(&MAX_VERTEX_TEXTURE_WIDTH_STRING);
+-    output("U\n");
++    if gl_version_string == "#version 100\n" {
++        output("\n");
++    } else {
++        output("U\n");
++    }
+ 
+     // Add any defines for features that were passed by the caller.
+     for feature in features {
+diff --git a/gfx/wr/wrench/src/compile_shaders.rs b/gfx/wr/wrench/src/compile_shaders.rs
+index 74bac2b1c293..9c58edd39509 100644
+--- a/gfx/wr/wrench/src/compile_shaders.rs
++++ b/gfx/wr/wrench/src/compile_shaders.rs
+@@ -48,6 +48,11 @@ pub fn compile_shaders(gl: &dyn gl::Gl, verbose: bool) -> usize {
+             });
+             total += 1;
+             let name = format!("{} [{}]", shader, config);
++            if let Some(dir) = std::env::var_os("WRENCH_SHADER_DUMP") {
++                let base = std::path::Path::new(&dir).join(format!("{}_{}", shader, config.replace(',', "_")));
++                std::fs::write(base.with_extension("vert"), &vs).unwrap();
++                std::fs::write(base.with_extension("frag"), &fs).unwrap();
++            }
+             let vs_id = shader_log(gl, gl::VERTEX_SHADER, &vs);
+             let fs_id = shader_log(gl, gl::FRAGMENT_SHADER, &fs);
+             let mut errors = Vec::new();
+-- 
+2.56.0
+

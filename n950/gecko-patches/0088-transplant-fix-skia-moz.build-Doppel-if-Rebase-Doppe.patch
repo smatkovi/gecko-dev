@@ -1,0 +1,25 @@
+From 0064f9808653f08e113937d4aa9010e76af582ca Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 14:43:07 +0000
+Subject: [PATCH 088/156] transplant-fix: skia moz.build Doppel-if
+ (Rebase-Doppelgaenger) bereinigt
+
+---
+ gfx/skia/moz.build | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
+index a0ac0ee8288e..309dd4570ac9 100644
+--- a/gfx/skia/moz.build
++++ b/gfx/skia/moz.build
+@@ -655,7 +655,6 @@ LOCAL_INCLUDES += [
+     "/gfx/harfbuzz/src",
+ ]
+ 
+-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk', 'android'):
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk', 'android', 'qt'):
+     LOCAL_INCLUDES += [
+         "/gfx/cairo/cairo/src",
+-- 
+2.56.0
+

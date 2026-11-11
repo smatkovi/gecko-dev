@@ -1,0 +1,32 @@
+From e3cb816b1b05b52d783b12d844f7f01f9e2b7c9f Mon Sep 17 00:00:00 2001
+From: Andrew Branson <andrew.branson@jolla.com>
+Date: Mon, 10 Aug 2026 13:56:15 +0200
+Subject: [PATCH 078/156] *mb2-prepare* Avoid WebIDL fork pools under QEMU
+
+ARM cross-builds run target Python through QEMU. WebIDL multiprocessing
+can leave zombie workers and hang, so reuse MOZBUILD_NO_FORK to select the
+existing sequential path.
+
+Mb2-scrape: filename=0105-sailfishos-build-Avoid-WebIDL-fork-pools-under-QEMU.patch
+---
+ dom/bindings/mozwebidlcodegen/__init__.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/dom/bindings/mozwebidlcodegen/__init__.py b/dom/bindings/mozwebidlcodegen/__init__.py
+index f15aeba11d3c..f56fceae85fc 100644
+--- a/dom/bindings/mozwebidlcodegen/__init__.py
++++ b/dom/bindings/mozwebidlcodegen/__init__.py
+@@ -39,7 +39,9 @@ class WebIDLPool:
+ 
+     def __init__(self, GeneratorState, *, processes=None):
+         if processes is None:
+-            processes = DEFAULT_PROCESS_COUNT
++            processes = (
++                1 if os.environ.get("MOZBUILD_NO_FORK") else DEFAULT_PROCESS_COUNT
++            )
+ 
+         # As a special case, don't spawn an extra process if processes=1
+         if processes == 1:
+-- 
+2.56.0
+

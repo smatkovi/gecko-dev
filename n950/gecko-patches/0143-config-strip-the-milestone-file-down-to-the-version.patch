@@ -1,0 +1,32 @@
+From 1a00c6cfa91ba19abcda334a1f7290bce60d0fc7 Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Tue, 25 Aug 2026 20:41:22 +0000
+Subject: [PATCH 143/156] config: strip the milestone file down to the version
+
+The comment block confused the milestone handling in this tree; only the
+version line is read.
+---
+ config/milestone.txt | 12 ------------
+ 1 file changed, 12 deletions(-)
+
+diff --git a/config/milestone.txt b/config/milestone.txt
+index bc03860814ef..7877d514ada6 100644
+--- a/config/milestone.txt
++++ b/config/milestone.txt
+@@ -1,13 +1 @@
+-# Holds the current milestone.
+-# Should be in the format of
+-#
+-#    x.x.x
+-#    x.x.x.x
+-#    x.x.x+
+-#
+-# Referenced by build/moz.configure/init.configure.
+-# Hopefully I'll be able to automate replacement of *all*
+-# hardcoded milestones in the tree from these two files.
+-#--------------------------------------------------------
+-
+ 153.6.0
+-- 
+2.56.0
+

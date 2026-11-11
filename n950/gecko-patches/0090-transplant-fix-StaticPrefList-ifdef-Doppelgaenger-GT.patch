@@ -1,0 +1,25 @@
+From 6a1f88a1ac2b61e89e3fd6f0321fc7fc96f951ec Mon Sep 17 00:00:00 2001
+From: fork <fork@local>
+Date: Fri, 21 Aug 2026 15:22:20 +0000
+Subject: [PATCH 090/156] transplant-fix: StaticPrefList ifdef-Doppelgaenger
+ (GTK-Block blieb offen, verschlang alles ab gl)
+
+---
+ modules/libpref/init/StaticPrefList.yaml | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 278d838528f0..9e66a4e022a5 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -7797,7 +7797,6 @@
+     mirror: always
+ #endif
+ 
+-#ifdef MOZ_WIDGET_GTK
+ #if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+ -   name: gfx.font_rendering.fontconfig.max_generic_substitutions
+     type: RelaxedAtomicUint32
+-- 
+2.56.0
+
