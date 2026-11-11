@@ -1,0 +1,257 @@
+From a8df3008a210d0d17c82a90b580e02c148c6be20 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 16:49:45 +0100
+Subject: [PATCH] webrender: ES 2.0 sampler size uniforms, exact quad instance
+ bytes
+
+The GLSL ES 1.00 rewrite reads data textures at (texel + 0.5) / sX_Size,
+but nothing set the sX_Size uniforms: every data fetch read garbage and
+only primitives without data textures (solid tiles) showed. Each
+program now records its samplers' size uniforms, and before each draw
+the device sets the bound textures' sizes where they changed. This
+covers ES 2.0 in general, not only GPUs with fewer texture units.
+
+ps_quad: aData.z packs four bytes and exceeds what a float holds
+exactly; on ES 2.0 they come from its unsigned 16-bit halves.
+
+wrench reftests under a strict ES 2.0 context: gradient 99/99 (was
+empty output that matched empty references), clip 25/30, scrolling
+27/29, split 20/21, text 42/71, transforms 28/55; also warns about
+incomplete framebuffers on ES 2.0.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/ps_quad.glsl | 19 ++++++++
+ gfx/wr/webrender/src/device/gl.rs | 78 ++++++++++++++++++++-----------
+ 2 files changed, 71 insertions(+), 26 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/ps_quad.glsl b/gfx/wr/webrender/res/ps_quad.glsl
+index 11ad872eda13..be1a5998367a 100644
+--- a/gfx/wr/webrender/res/ps_quad.glsl
++++ b/gfx/wr/webrender/res/ps_quad.glsl
+@@ -187,6 +187,24 @@ struct QuadInstance {
+ };
+ 
+ QuadInstance decode_instance() {
++#if __VERSION__ == 100
++    // aData.z packs four bytes and exceeds what a float holds exactly; its
++    // unsigned 16-bit halves (aData_lh1.xy, see webrender_build) do not.
++    highp float z_lo = aData_lh1.x;
++    highp float z_hi = aData_lh1.y;
++    QuadInstance qi = QuadInstance(
++        aData.x,
++
++        aData.y,
++
++        int(floor(z_hi / 256.0)),
++        int(mod(z_hi, 256.0)),
++        int(floor(z_lo / 256.0)),
++        int(mod(z_lo, 256.0)),
++
++        aData.w
++    );
++#else
+     QuadInstance qi = QuadInstance(
+         aData.x,
+ 
+@@ -199,6 +217,7 @@ QuadInstance decode_instance() {
+ 
+         aData.w
+     );
++#endif
+ 
+     return qi;
+ }
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index 8551459bd14b..b16cc0aa74d1 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -698,6 +698,18 @@ impl Drop for Texture {
+     }
+ }
+ 
++/// A sampler of a program on a GPU with fewer texture units than sampler
++/// slots, or without texelFetch (ES 2.0): the unit it reads, and its
++/// `<sampler>_Size` uniform (see webrender_build's GLSL ES 1.00 rewrite)
++/// with the size last set.
++#[derive(Clone)]
++struct ProgramSampler {
++    slot: usize,
++    unit: usize,
++    size_location: gl::GLint,
++    size: DeviceIntSize,
++}
++
+ pub struct Program {
+     id: gl::GLuint,
+     u_transform: gl::GLint,
+@@ -1233,12 +1245,11 @@ pub struct Device {
+     /// With fewer texture units than WebRender's samplers (ES 2.0 GPUs):
+     /// the texture of each sampler slot, each program's (slot, unit)
+     /// pairs, and the bound program's, checked before each draw.
+-    slot_textures: [(gl::GLuint, gl::GLenum); 16],
++    slot_textures: [(gl::GLuint, gl::GLenum, DeviceIntSize); 16],
+     /// ES 2.0: the frame in which each float texture was last re-allocated
+     /// (see update_impl_gles2).
+     float_textures_renewed: FastHashMap<gl::GLuint, GpuFrameId>,
+-    program_units: FastHashMap<gl::GLuint, Vec<(usize, usize)>>,
+-    bound_program_units: Vec<(usize, usize)>,
++    program_units: FastHashMap<gl::GLuint, Vec<ProgramSampler>>,
+     bound_program: gl::GLuint,
+     bound_program_name: Rc<std::ffi::CString>,
+     bound_vao: gl::GLuint,
+@@ -2162,10 +2173,9 @@ impl Device {
+             bound_textures: [0; 16],
+             texture_units,
+             instance_scratch: Vec::new(),
+-            slot_textures: [(0, gl::TEXTURE_2D); 16],
++            slot_textures: [(0, gl::TEXTURE_2D, DeviceIntSize::zero()); 16],
+             float_textures_renewed: FastHashMap::default(),
+             program_units: FastHashMap::default(),
+-            bound_program_units: Vec::new(),
+             bound_program: 0,
+             bound_program_name: Rc::new(std::ffi::CString::new("").unwrap()),
+             bound_vao: 0,
+@@ -2463,10 +2473,11 @@ impl Device {
+         target: gl::GLenum,
+         set_swizzle: Option<Swizzle>,
+         image_rendering: Option<ImageRendering>,
++        size: DeviceIntSize,
+     ) {
+         debug_assert!(self.inside_frame);
+ 
+-        self.slot_textures[slot.0] = (id, target);
++        self.slot_textures[slot.0] = (id, target, size);
+         if slot.0 >= self.texture_units {
+             return;
+         }
+@@ -2516,7 +2527,7 @@ impl Device {
+         } else {
+             None
+         };
+-        self.bind_texture_impl(slot.into(), texture.id, texture.target, set_swizzle, None);
++        self.bind_texture_impl(slot.into(), texture.id, texture.target, set_swizzle, None, texture.size);
+     }
+ 
+     pub fn bind_external_texture<S>(&mut self, slot: S, external_texture: &ExternalTexture)
+@@ -2529,6 +2540,7 @@ impl Device {
+             external_texture.target,
+             None,
+             Some(external_texture.image_rendering),
++            DeviceIntSize::zero(),
+         );
+     }
+ 
+@@ -2842,10 +2854,6 @@ impl Device {
+             self.gl.use_program(program.id);
+             self.bound_program = program.id;
+             self.bound_program_name = program.source_info.full_name_cstr.clone();
+-            if self.texture_units < self.bound_textures.len() {
+-                self.bound_program_units =
+-                    self.program_units.get(&program.id).cloned().unwrap_or_default();
+-            }
+         }
+         true
+     }
+@@ -2853,15 +2861,20 @@ impl Device {
+     /// Binds the bound program's sampler textures to the units it reads
+     /// them from, where another program's use left something else there.
+     fn bind_program_textures(&mut self) {
++        let Some(samplers) = self.program_units.get_mut(&self.bound_program) else { return };
+         let mut changed = false;
+-        for &(slot, unit) in &self.bound_program_units {
+-            let (id, target) = self.slot_textures[slot];
+-            if id != 0 && self.bound_textures[unit] != id {
+-                self.gl.active_texture(gl::TEXTURE0 + unit as gl::GLuint);
++        for sampler in samplers.iter_mut() {
++            let (id, target, size) = self.slot_textures[sampler.slot];
++            if id != 0 && self.bound_textures[sampler.unit] != id {
++                self.gl.active_texture(gl::TEXTURE0 + sampler.unit as gl::GLuint);
+                 self.gl.bind_texture(target, id);
+-                self.bound_textures[unit] = id;
++                self.bound_textures[sampler.unit] = id;
+                 changed = true;
+             }
++            if sampler.size_location != -1 && sampler.size != size && size != DeviceIntSize::zero() {
++                self.gl.uniform_2f(sampler.size_location, size.width as f32, size.height as f32);
++                sampler.size = size;
++            }
+         }
+         if changed {
+             self.gl.active_texture(gl::TEXTURE0);
+@@ -3160,6 +3173,12 @@ impl Device {
+             );
+         }
+ 
++        if self.capabilities.is_gles2 {
++            let status = self.gl.check_frame_buffer_status(draw);
++            if status != gl::FRAMEBUFFER_COMPLETE {
++                warn!("incomplete framebuffer 0x{:x} for a {:?} texture", status, texture.format);
++            }
++        }
+         debug_assert_eq!(
+             self.gl.check_frame_buffer_status(draw),
+             gl::FRAMEBUFFER_COMPLETE,
+@@ -3273,7 +3292,7 @@ impl Device {
+         let src_y0 = src_rect.min.y + self.bound_read_fbo.1.y;
+         match dest_target {
+             DrawTarget::Texture { id, target, .. } if src_rect.size() == dest_rect.size() => {
+-                self.bind_texture_impl(DEFAULT_TEXTURE, id, target, None, None);
++                self.bind_texture_impl(DEFAULT_TEXTURE, id, target, None, None, DeviceIntSize::zero());
+                 self.gl.copy_tex_sub_image_2d(
+                     target,
+                     0,
+@@ -3342,6 +3361,7 @@ impl Device {
+         for slot_texture in &mut self.slot_textures {
+             if slot_texture.0 == texture.id {
+                 slot_texture.0 = 0;
++                slot_texture.2 = DeviceIntSize::zero();
+             }
+         }
+         self.float_textures_renewed.remove(&texture.id);
+@@ -3435,16 +3455,23 @@ impl Device {
+         // bind_program() must be called before calling bind_shader_samplers
+         assert_eq!(self.bound_program, program.id);
+ 
+-        if self.texture_units < self.bound_textures.len() {
++        if self.capabilities.is_gles2 || self.texture_units < self.bound_textures.len() {
+             // Slots beyond the GPU's units go to units this program leaves free.
+-            let used: Vec<(gl::GLint, usize)> = bindings
++            let used: Vec<(gl::GLint, usize, gl::GLint)> = bindings
+                 .iter()
+-                .map(|b| (self.gl.get_uniform_location(program.id, b.0), b.1.into().0))
+-                .filter(|&(location, _)| location != -1)
++                .map(|b| {
++                    let size_name = format!("{}_Size", b.0);
++                    (
++                        self.gl.get_uniform_location(program.id, b.0),
++                        b.1.into().0,
++                        self.gl.get_uniform_location(program.id, &size_name),
++                    )
++                })
++                .filter(|&(location, _, _)| location != -1)
+                 .collect();
+-            let mut taken: Vec<usize> = used.iter().map(|&(_, slot)| slot).filter(|&s| s < self.texture_units).collect();
++            let mut taken: Vec<usize> = used.iter().map(|&(_, slot, _)| slot).filter(|&s| s < self.texture_units).collect();
+             let mut units = Vec::new();
+-            for &(location, slot) in &used {
++            for &(location, slot, size_location) in &used {
+                 let unit = if slot < self.texture_units {
+                     slot
+                 } else if let Some(free) = (0 .. self.texture_units).find(|u| !taken.contains(u)) {
+@@ -3455,10 +3482,9 @@ impl Device {
+                     continue;
+                 };
+                 self.gl.uniform_1i(location, unit as gl::GLint);
+-                units.push((slot, unit));
++                units.push(ProgramSampler { slot, unit, size_location, size: DeviceIntSize::zero() });
+             }
+-            self.program_units.insert(program.id, units.clone());
+-            self.bound_program_units = units;
++            self.program_units.insert(program.id, units);
+             return;
+         }
+ 
+-- 
+2.56.0
+
