@@ -1,0 +1,40 @@
+From 73b4c6060391c26f88c00610d6fdeb94c2fd85a9 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 13:53:49 +0100
+Subject: [PATCH] wrench: compile_shaders lists each program's samplers
+
+WRENCH_REPORT_SAMPLERS prints the active sampler uniforms of every
+linked variant, to check them against an ES 2.0 GPU's texture units.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/compile_shaders.rs | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/gfx/wr/wrench/src/compile_shaders.rs b/gfx/wr/wrench/src/compile_shaders.rs
+index 9c58edd39509..e80bba54c381 100644
+--- a/gfx/wr/wrench/src/compile_shaders.rs
++++ b/gfx/wr/wrench/src/compile_shaders.rs
+@@ -73,6 +73,19 @@ pub fn compile_shaders(gl: &dyn gl::Gl, verbose: bool) -> usize {
+                 }
+                 if status[0] == 0 {
+                     errors.push(format!("link:\n{}", gl.get_program_info_log(program).trim_end()));
++                } else if std::env::var_os("WRENCH_REPORT_SAMPLERS").is_some() {
++                    let mut count = [0];
++                    unsafe {
++                        gl.get_program_iv(program, gl::ACTIVE_UNIFORMS, &mut count);
++                    }
++                    let samplers: Vec<String> = (0..count[0] as u32)
++                        .map(|i| gl.get_active_uniform(program, i))
++                        .filter(|(_, ty, _)| {
++                            matches!(*ty, gl::SAMPLER_2D | gl::SAMPLER_EXTERNAL_OES | gl::INT_SAMPLER_2D)
++                        })
++                        .map(|(_, _, name)| name)
++                        .collect();
++                    println!("samplers {} [{}] {}", samplers.len(), name, samplers.join(" "));
+                 }
+                 gl.delete_program(program);
+             }
+-- 
+2.56.0
+
