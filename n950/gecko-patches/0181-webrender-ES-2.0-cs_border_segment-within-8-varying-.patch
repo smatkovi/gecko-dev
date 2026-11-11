@@ -1,0 +1,209 @@
+From dec513d703f3ff33ebc13a870e1fbb8d8ef73b5f Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:20:50 +0100
+Subject: [PATCH] webrender: ES 2.0 cs_border_segment within 8 varying vectors
+
+52 components on ES 2.0 become 32: the four colors as pairs of 8-bit
+channels in highp floats, the color line and a dash corner's two lines
+as distances to them (affine in the position, so they interpolate
+exactly), and segment, clip mode, styles and edge axes in one float.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/cs_border_segment.glsl | 89 ++++++++++++++++++++-
+ 1 file changed, 88 insertions(+), 1 deletion(-)
+
+diff --git a/gfx/wr/webrender/res/cs_border_segment.glsl b/gfx/wr/webrender/res/cs_border_segment.glsl
+index 90607ff6c548..92050b050a03 100644
+--- a/gfx/wr/webrender/res/cs_border_segment.glsl
++++ b/gfx/wr/webrender/res/cs_border_segment.glsl
+@@ -4,6 +4,20 @@
+ 
+ #include shared,rect,ellipse
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, 52 components otherwise): the
++// four colors as 8-bit pairs, the color line and a dash corner's two lines
++// as distances to them (affine in the position, so they interpolate
++// exactly), and segment, clip mode, styles and edge axes in one float.
++varying highp vec4 v_colors0;
++varying highp vec4 v_colors1;
++// xy: local position, z: distance to the color line, w: packed integers
++varying highp vec4 v_pos_line_flags;
++#define vPos v_pos_line_flags.xy
++// dot and dash edge: clip parameters, dash corner: distances to its lines
++varying highp vec4 v_clip_data;
++#define vClipParams1 v_clip_data
++#else
+ // For edges, the colors are the same. For corners, these
+ // are the colors of each edge making up the corner.
+ flat varying mediump vec4 vColor00;
+@@ -23,6 +37,7 @@ flat varying mediump vec2 vSegmentClipMode;
+ // We cast these to/from floats rather than using an ivec (and bitshifting)
+ // due to a driver bug on Adreno 3xx. See bug 1730458.
+ flat varying mediump vec4 vStyleEdgeAxis;
++#endif
+ 
+ // xy = Local space position of the clip center.
+ // zw = Scale the rect origin by this to get the outer
+@@ -39,12 +54,14 @@ flat varying highp vec4 vEdgeReference;
+ // Stores widths/2 and widths/3 to save doing this in FS.
+ flat varying highp vec4 vPartialWidths;
+ 
++#if __VERSION__ != 100
+ // Clipping parameters for dot or dash.
+ flat varying mediump vec4 vClipParams1;
+ flat varying mediump vec4 vClipParams2;
+ 
+ // Local space position
+ varying highp vec2 vPos;
++#endif
+ 
+ #define SEGMENT_TOP_LEFT        0
+ #define SEGMENT_TOP_RIGHT       1
+@@ -84,6 +101,20 @@ PER_INSTANCE attribute vec2 aRadii;
+ PER_INSTANCE attribute vec4 aClipParams1;
+ PER_INSTANCE attribute vec4 aClipParams2;
+ 
++#if __VERSION__ == 100
++// a color as two floats of two 8-bit channels each, exact in highp
++vec2 wr_pack_color(vec4 color) {
++    vec4 q = floor(clamp(color, 0.0, 1.0) * 255.0 + 0.5);
++    return vec2(q.r * 256.0 + q.g, q.b * 256.0 + q.a);
++}
++
++// distance_to_line() of the fragment stage; 0 for a degenerate line
++float wr_distance_to_line(vec2 p0, vec2 perp_dir, vec2 p) {
++    float len = length(perp_dir);
++    return len > 0.0 ? dot(perp_dir / len, p0 - p) : 0.0;
++}
++#endif
++
+ vec2 get_outer_corner_scale(int segment) {
+     vec2 p;
+ 
+@@ -183,25 +214,39 @@ void main(void) {
+         }
+     }
+ 
++#if __VERSION__ == 100
++    v_pos_line_flags.w = float(segment + 8 * clip_mode + 32 * style0 + 512 * style1 +
++                               8192 * edge_axis.x + 16384 * edge_axis.y);
++#else
+     vSegmentClipMode = vec2(float(segment), float(clip_mode));
+     vStyleEdgeAxis = vec4(float(style0), float(style1), float(edge_axis.x), float(edge_axis.y));
++#endif
+ 
+     vPartialWidths = vec4(aWidths / 3.0, aWidths / 2.0);
+     vPos = size * aPosition.xy;
+ 
+     vec4 color00, color01, color10, color11;
+     get_colors_for_side(aColor0, style0, color00, color01);
++    get_colors_for_side(aColor1, style1, color10, color11);
++#if __VERSION__ == 100
++    v_colors0 = vec4(wr_pack_color(color00), wr_pack_color(color01));
++    v_colors1 = vec4(wr_pack_color(color10), wr_pack_color(color11));
++#else
+     vColor00 = color00;
+     vColor01 = color01;
+-    get_colors_for_side(aColor1, style1, color10, color11);
+     vColor10 = color10;
+     vColor11 = color11;
++#endif
+     vClipCenter_Sign = vec4(outer + clip_sign * aRadii, clip_sign);
+     vClipRadii = vec4(aRadii, max(aRadii - aWidths, 0.0));
++#if __VERSION__ != 100
+     vColorLine = vec4(outer, aWidths.y * -clip_sign.y, aWidths.x * clip_sign.x);
++#endif
+     vEdgeReference = vec4(edge_reference, edge_reference + aWidths);
+     vClipParams1 = aClipParams1;
++#if __VERSION__ != 100
+     vClipParams2 = aClipParams2;
++#endif
+ 
+     // For the case of dot and dash clips, optimize the number of pixels that
+     // are hit to just include the dot itself.
+@@ -228,6 +273,16 @@ void main(void) {
+         vPos = clamp(vPos, center - r, center + r);
+     }
+ 
++#if __VERSION__ == 100
++    v_pos_line_flags.z = wr_distance_to_line(outer,
++        vec2(aWidths.y * -clip_sign.y, aWidths.x * clip_sign.x), vPos);
++    if (clip_mode == CLIP_DASH_CORNER) {
++        v_clip_data = vec4(wr_distance_to_line(aClipParams1.xy, aClipParams1.zw, vPos),
++                           wr_distance_to_line(aClipParams2.xy, aClipParams2.zw, vPos),
++                           0.0, 0.0);
++    }
++#endif
++
+     gl_Position = uTransform * vec4(aTaskOrigin + aRect.xy + vPos, 0.0, 1.0);
+ }
+ #endif
+@@ -321,18 +376,45 @@ vec4 evaluate_color_for_style_in_edge(
+     return color0;
+ }
+ 
++#if __VERSION__ == 100
++vec4 vColor00, vColor01, vColor10, vColor11;
++
++vec4 wr_unpack_color(vec2 pair) {
++    vec2 p = floor(pair + 0.5);
++    vec2 hi = floor(p / 256.0);
++    vec2 lo = p - hi * 256.0;
++    return vec4(hi.x, lo.x, hi.y, lo.y) * (1.0 / 255.0);
++}
++#endif
++
+ void main(void) {
+     float aa_range = compute_aa_range(vPos);
+     vec4 color0, color1;
+ 
++#if __VERSION__ == 100
++    vColor00 = wr_unpack_color(v_colors0.xy);
++    vColor01 = wr_unpack_color(v_colors0.zw);
++    vColor10 = wr_unpack_color(v_colors1.xy);
++    vColor11 = wr_unpack_color(v_colors1.zw);
++    float flags = floor(v_pos_line_flags.w + 0.5);
++    int segment = int(mod(flags, 8.0));
++    int clip_mode = int(mod(floor(flags / 8.0), 4.0));
++    ivec2 style = ivec2(int(mod(floor(flags / 32.0), 16.0)), int(mod(floor(flags / 512.0), 16.0)));
++    ivec2 edge_axis = ivec2(int(mod(floor(flags / 8192.0), 2.0)), int(floor(flags / 16384.0)));
++#else
+     int segment = int(vSegmentClipMode.x);
+     int clip_mode = int(vSegmentClipMode.y);
+     ivec2 style = ivec2(int(vStyleEdgeAxis.x), int(vStyleEdgeAxis.y));
+     ivec2 edge_axis = ivec2(int(vStyleEdgeAxis.z), int(vStyleEdgeAxis.w));
++#endif
+ 
+     float mix_factor = 0.0;
+     if (edge_axis.x != edge_axis.y) {
++#if __VERSION__ == 100
++        float d_line = v_pos_line_flags.z;
++#else
+         float d_line = distance_to_line(vColorLine.xy, vColorLine.zw, vPos);
++#endif
+         mix_factor = distance_aa(aa_range, -d_line);
+     }
+ 
+@@ -361,12 +443,17 @@ void main(void) {
+         } else if (wr_switch_10 == (CLIP_DASH_CORNER)) {
+             // Get SDF for the two line/tangent clip lines,
+             // do SDF subtract to get clip distance.
++#if __VERSION__ == 100
++            float d0 = v_clip_data.x;
++            float d1 = v_clip_data.y;
++#else
+             float d0 = distance_to_line(vClipParams1.xy,
+                                         vClipParams1.zw,
+                                         vPos);
+             float d1 = distance_to_line(vClipParams2.xy,
+                                         vClipParams2.zw,
+                                         vPos);
++#endif
+             d = max(d0, -d1);
+         } else {
+         }
+-- 
+2.56.0
+
