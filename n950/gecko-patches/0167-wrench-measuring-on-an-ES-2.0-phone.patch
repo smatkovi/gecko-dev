@@ -1,7 +1,7 @@
-From 51beecff055e74ffbc87b5f36be87f38774f1391 Mon Sep 17 00:00:00 2001
+From b605305cc7da97bbd26b6a9661bae5bed3f2b311 Mon Sep 17 00:00:00 2001
 From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
 Date: Wed, 11 Nov 2026 16:03:02 +0100
-Subject: [PATCH 167/167] wrench: measuring on an ES 2.0 phone
+Subject: [PATCH] wrench: measuring on an ES 2.0 phone
 
 - EGL before GLX (WRENCH_GLX for the old order),
 - perf: wall-clock frame times (frame_time_ns), no wait for GPU
@@ -11,19 +11,10 @@ Subject: [PATCH 167/167] wrench: measuring on an ES 2.0 phone
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- gfx/wr/wrench/benchmarks/one.list |  1 +
- gfx/wr/wrench/src/main.rs         | 70 ++++++++++++++++++++++++++++++-
- gfx/wr/wrench/src/perf.rs         | 21 +++++++++-
- 3 files changed, 88 insertions(+), 4 deletions(-)
- create mode 100644 gfx/wr/wrench/benchmarks/one.list
+ gfx/wr/wrench/src/main.rs | 70 +++++++++++++++++++++++++++++++++++++--
+ gfx/wr/wrench/src/perf.rs | 21 ++++++++++--
+ 2 files changed, 87 insertions(+), 4 deletions(-)
 
-diff --git a/gfx/wr/wrench/benchmarks/one.list b/gfx/wr/wrench/benchmarks/one.list
-new file mode 100644
-index 000000000000..0fbfc62b3949
---- /dev/null
-+++ b/gfx/wr/wrench/benchmarks/one.list
-@@ -0,0 +1 @@
-+simple-batching.yaml
 diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
 index 11ddf8005e11..cac1ec6d5cc8 100644
 --- a/gfx/wr/wrench/src/main.rs
