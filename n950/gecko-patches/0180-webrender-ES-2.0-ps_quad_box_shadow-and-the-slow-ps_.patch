@@ -1,0 +1,275 @@
+From 4d1ec91a79b87fc089372d9dd60711db4013db03 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 22:18:29 +0100
+Subject: [PATCH] webrender: ES 2.0 ps_quad_box_shadow and the slow
+ ps_quad_mask within 8 varying vectors
+
+On ES 2.0 these pass only what the fragment shader cannot derive: the box
+shadow interpolates its nine-patch UV (affine in the position), takes the
+local position from ps_quad and the inset flag from v_quad_spare, and
+rebuilds the sample bounds from the atlas rect and the texture size and
+the corner centers from the element rect and radii (48 -> 32 components).
+The slow rounded-rect mask passes the clip rect, radii and shapes and
+derives the corner ellipses and half-space planes per fragment, with the
+clip mode in v_quad_spare (50 -> 32).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/ps_quad_box_shadow.glsl | 57 +++++++++++++++-
+ gfx/wr/webrender/res/ps_quad_mask.glsl       | 71 +++++++++++++++++---
+ 2 files changed, 115 insertions(+), 13 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/ps_quad_box_shadow.glsl b/gfx/wr/webrender/res/ps_quad_box_shadow.glsl
+index 3e6543989b3b..c2fe03b358e7 100644
+--- a/gfx/wr/webrender/res/ps_quad_box_shadow.glsl
++++ b/gfx/wr/webrender/res/ps_quad_box_shadow.glsl
+@@ -21,6 +21,20 @@
+ 
+ #include ps_quad,ellipse,shared
+ 
++#if __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, ps_quad takes 3): what the
++// fragment shader can derive is not passed. The local position is
++// ps_quad's, the inset flag goes in v_quad_spare, the near nine-patch edges
++// are 0.5, the sample bounds are the atlas rect inset by half a texel, and
++// the corner centers follow from the element rect and the radii.
++// xy: nine-patch UV before folding (position / alloc_size, affine in the
++// position), zw: far nine-patch edges.
++varying highp vec4 v_uv_linear_edge;
++flat varying highp vec4 v_uv_rect;
++flat varying highp vec4 v_elem_rect;
++flat varying highp vec4 v_elem_radii_tl_tr;
++flat varying highp vec4 v_elem_radii_br_bl;
++#else
+ // xy: position relative to dest_rect.p0, for nine-patch UV sampling.
+ // zw: position in local (primitive) space, for element clip SDF evaluation.
+ varying highp vec4 v_shadow_pos_local_pos;
+@@ -48,6 +62,7 @@ flat varying highp vec4 vElemCenter_Radius_TL;
+ flat varying highp vec4 vElemCenter_Radius_TR;
+ flat varying highp vec4 vElemCenter_Radius_BR;
+ flat varying highp vec4 vElemCenter_Radius_BL;
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+@@ -61,6 +76,19 @@ void pattern_vertex(PrimitiveInfo info) {
+     vec2 alloc_size     = data0.xy;
+     vec2 dest_rect_size = data0.zw;
+     vec2 dest_rect_off  = data1.xy;
++#if __VERSION__ == 100
++    v_uv_linear_edge = vec4(
++        (info.local_pos - info.local_prim_rect.p0 - dest_rect_off) / alloc_size,
++        dest_rect_size / alloc_size - 0.5
++    );
++    v_quad_spare = data1.z;
++    vec2 texture_size = vec2(TEX_SIZE(sColor0));
++    v_uv_rect = vec4(info.segment.uv_rect.p0, info.segment.uv_rect.p1) / texture_size.xyxy;
++    vec2 elem_p0 = info.local_prim_rect.p0 + data2.xy;
++    v_elem_rect = vec4(elem_p0, elem_p0 + data2.zw);
++    v_elem_radii_tl_tr = data3;
++    v_elem_radii_br_bl = data4;
++#else
+     v_uv_scale_inset    = vec4(vec2(1.0) / alloc_size, data1.z, 0.0);
+ 
+     v_shadow_pos_local_pos = vec4(
+@@ -97,6 +125,7 @@ void pattern_vertex(PrimitiveInfo info) {
+     vElemCenter_Radius_TR = vec4(elem_p1.x - r_tr.x, elem_p0.y + r_tr.y, r_tr);
+     vElemCenter_Radius_BR = vec4(elem_p1 - r_br, r_br);
+     vElemCenter_Radius_BL = vec4(elem_p0.x + r_bl.x, elem_p1.y - r_bl.y, r_bl);
++#endif
+ }
+ 
+ #endif
+@@ -104,18 +133,28 @@ void pattern_vertex(PrimitiveInfo info) {
+ #ifdef WR_FRAGMENT_SHADER
+ 
+ vec4 pattern_fragment(vec4 base_color) {
++#if __VERSION__ == 100
++    vec2 local_pos  = vLocalPos;
++    float inset     = v_quad_spare;
++    vec2 uv_linear  = v_uv_linear_edge.xy;
++    vec4 edge       = vec4(0.5, 0.5, v_uv_linear_edge.zw);
++    vec4 uv_bounds  = v_uv_rect + vec4(0.5, 0.5, -0.5, -0.5) / vec2(TEX_SIZE(sColor0)).xyxy;
++#else
+     vec2 shadow_pos = v_shadow_pos_local_pos.xy;
+     vec2 local_pos  = v_shadow_pos_local_pos.zw;
+     vec2 uv_scale   = v_uv_scale_inset.xy;
+     float inset     = v_uv_scale_inset.z;
+ 
+     vec2 uv_linear = shadow_pos * uv_scale;
++    vec4 edge = v_edge;
++    vec4 uv_bounds = v_uv_bounds;
++#endif
+ 
+-    vec2 uv = clamp(uv_linear, vec2(0.0), v_edge.xy);
+-    uv += max(vec2(0.0), uv_linear - v_edge.zw);
++    vec2 uv = clamp(uv_linear, vec2(0.0), edge.xy);
++    uv += max(vec2(0.0), uv_linear - edge.zw);
+ 
+     uv = mix(v_uv_rect.xy, v_uv_rect.zw, uv);
+-    uv = clamp(uv, v_uv_bounds.xy, v_uv_bounds.zw);
++    uv = clamp(uv, uv_bounds.xy, uv_bounds.zw);
+ 
+     float alpha = TEX_SAMPLE(sColor0, uv).r;
+ 
+@@ -129,6 +168,17 @@ vec4 pattern_fragment(vec4 base_color) {
+     // distance_aa returns 1 when dist < 0 (inside) and 0 when dist > 0 (outside).
+     float aa_range = compute_aa_range(local_pos);
+ 
++#if __VERSION__ == 100
++    vec2 r_tl = v_elem_radii_tl_tr.xy;
++    vec2 r_tr = v_elem_radii_tl_tr.zw;
++    vec2 r_br = v_elem_radii_br_bl.xy;
++    vec2 r_bl = v_elem_radii_br_bl.zw;
++
++    vec2 c_tl = v_elem_rect.xy + r_tl;
++    vec2 c_tr = vec2(v_elem_rect.z - r_tr.x, v_elem_rect.y + r_tr.y);
++    vec2 c_br = v_elem_rect.zw - r_br;
++    vec2 c_bl = vec2(v_elem_rect.x + r_bl.x, v_elem_rect.w - r_bl.y);
++#else
+     vec2 c_tl = vElemCenter_Radius_TL.xy;
+     vec2 c_tr = vElemCenter_Radius_TR.xy;
+     vec2 c_br = vElemCenter_Radius_BR.xy;
+@@ -138,6 +188,7 @@ vec4 pattern_fragment(vec4 base_color) {
+     vec2 r_tr = vElemCenter_Radius_TR.zw;
+     vec2 r_br = vElemCenter_Radius_BR.zw;
+     vec2 r_bl = vElemCenter_Radius_BL.zw;
++#endif
+ 
+     // Reconstruct plane normals from the stored radii.
+     vec2 n_tl = -r_tl.yx;
+diff --git a/gfx/wr/webrender/res/ps_quad_mask.glsl b/gfx/wr/webrender/res/ps_quad_mask.glsl
+index c8ba77f0ed44..519e13fec14f 100644
+--- a/gfx/wr/webrender/res/ps_quad_mask.glsl
++++ b/gfx/wr/webrender/res/ps_quad_mask.glsl
+@@ -11,6 +11,15 @@ varying highp vec4 vClipLocalPos;
+ #ifdef WR_FEATURE_FAST_PATH
+ flat varying highp vec4 v_clip_radii;
+ flat varying highp vec2 v_clip_size;
++#elif __VERSION__ == 100
++// ES 2.0 (PowerVR SGX530: 8 varying vectors, ps_quad takes 3): the clip rect
++// and radii, from which the fragment shader derives the corner ellipses and
++// half-space planes; the clip mode goes in v_quad_spare.
++#define WR_MASK_ES2
++flat varying highp vec4 v_clip_rect;
++flat varying highp vec4 v_clip_radii_top;
++flat varying highp vec4 v_clip_radii_bottom;
++flat varying highp vec4 vClipShape;
+ #else
+ flat varying highp vec4 vClipCenter_Radius_TL;
+ flat varying highp vec4 vClipCenter_Radius_TR;
+@@ -24,7 +33,21 @@ flat varying highp vec4 vClipPlane_C;
+ flat varying highp vec4 vClipShape;
+ 
+ #endif
++#ifndef WR_MASK_ES2
+ flat varying highp vec2 vClipMode;
++#endif
++
++#if !defined(WR_FEATURE_FAST_PATH)
++vec4 precalc_corner(vec2 center, vec2 radii, float k) {
++    if (k == 1.0) {
++        // round/ellipse corner, precalc the ellipse parameters
++        return vec4(center, inverse_radii_squared(radii));
++    } else {
++        // superellipse, precalc the superellipse parameters
++        return vec4(center, inverse_radii(radii));
++    }
++}
++#endif
+ 
+ #ifdef WR_VERTEX_SHADER
+ 
+@@ -69,16 +92,6 @@ Clip fetch_clip(int index) {
+     return clip;
+ }
+ 
+-vec4 precalc_corner(vec2 center, vec2 radii, float k) {
+-    if (k == 1.0) {
+-        // round/ellipse corner, precalc the ellipse parameters
+-        return vec4(center, inverse_radii_squared(radii));
+-    } else {
+-        // superellipse, precalc the superellipse parameters
+-        return vec4(center, inverse_radii(radii));
+-    }
+-}
+-
+ void pattern_vertex(PrimitiveInfo prim_info) {
+ 
+     Clip clip = fetch_clip(aClipData.y);
+@@ -98,7 +111,11 @@ void pattern_vertex(PrimitiveInfo prim_info) {
+     }
+ #endif
+ 
++#ifdef WR_MASK_ES2
++    v_quad_spare = clip.mode;
++#else
+     vClipMode.x = clip.mode;
++#endif
+ 
+ #ifdef WR_FEATURE_FAST_PATH
+     // If the radii are uniform, we can use a simpler 2d signed distance
+@@ -108,6 +125,11 @@ void pattern_vertex(PrimitiveInfo prim_info) {
+     vClipLocalPos.xy -= (half_size + clip.rect.p0) * vClipLocalPos.w;
+     v_clip_size = half_size;
+     v_clip_radii = clip.radii;
++#elif defined(WR_MASK_ES2)
++    v_clip_rect = vec4(clip.rect.p0, clip.rect.p1);
++    v_clip_radii_top = clip.radii_top;
++    v_clip_radii_bottom = clip.radii_bottom;
++    vClipShape = clip.shape;
+ #else
+     vec2 r_tl = clip.radii_top.xy;
+     vec2 r_tr = clip.radii_top.zw;
+@@ -182,11 +204,36 @@ vec4 pattern_fragment(vec4 _base_color) {
+ 
+ #ifdef WR_FEATURE_FAST_PATH
+     float dist = sd_round_box(clip_local_pos, v_clip_size, v_clip_radii);
++#else
++#ifdef WR_MASK_ES2
++    vec2 clip_p0 = v_clip_rect.xy;
++    vec2 clip_p1 = v_clip_rect.zw;
++    vec2 r_tl = v_clip_radii_top.xy;
++    vec2 r_tr = v_clip_radii_top.zw;
++    vec2 r_br = v_clip_radii_bottom.zw;
++    vec2 r_bl = v_clip_radii_bottom.xy;
++
++    vec4 vClipCenter_Radius_TL = precalc_corner(clip_p0 + r_tl, r_tl, vClipShape.x);
++    vec4 vClipCenter_Radius_TR = precalc_corner(vec2(clip_p1.x - r_tr.x, clip_p0.y + r_tr.y),
++                                                r_tr, vClipShape.y);
++    vec4 vClipCenter_Radius_BR = precalc_corner(clip_p1 - r_br, r_br, vClipShape.z);
++    vec4 vClipCenter_Radius_BL = precalc_corner(vec2(clip_p0.x + r_bl.x, clip_p1.y - r_bl.y),
++                                                r_bl, vClipShape.w);
++
++    vec2 n_tl = -r_tl.yx;
++    vec2 n_tr = vec2(r_tr.y, -r_tr.x);
++    vec2 n_br = r_br.yx;
++    vec2 n_bl = vec2(-r_bl.y, r_bl.x);
++    vec3 plane_tl = vec3(n_tl, dot(n_tl, vec2(clip_p0.x, clip_p0.y + r_tl.y)));
++    vec3 plane_tr = vec3(n_tr, dot(n_tr, vec2(clip_p1.x - r_tr.x, clip_p0.y)));
++    vec3 plane_br = vec3(n_br, dot(n_br, vec2(clip_p1.x, clip_p1.y - r_br.y)));
++    vec3 plane_bl = vec3(n_bl, dot(n_bl, vec2(clip_p0.x + r_bl.x, clip_p1.y)));
+ #else
+     vec3 plane_tl = vec3(vClipPlane_A.x, vClipPlane_A.y, vClipPlane_A.z);
+     vec3 plane_tr = vec3(vClipPlane_A.w, vClipPlane_B.x, vClipPlane_B.y);
+     vec3 plane_br = vec3(vClipPlane_B.z, vClipPlane_B.w, vClipPlane_C.x);
+     vec3 plane_bl = vec3(vClipPlane_C.y, vClipPlane_C.z, vClipPlane_C.w);
++#endif
+ 
+     float dist;
+     if (vClipShape == vec4(1.0)) {
+@@ -219,7 +266,11 @@ vec4 pattern_fragment(vec4 _base_color) {
+     float alpha = distance_aa(aa_range, dist);
+ 
+     // Select alpha or inverse alpha depending on clip in/out.
++#ifdef WR_MASK_ES2
++    float final_alpha = mix(alpha, 1.0 - alpha, v_quad_spare);
++#else
+     float final_alpha = mix(alpha, 1.0 - alpha, vClipMode.x);
++#endif
+ 
+     return vec4(final_alpha);
+ }
+-- 
+2.56.0
+
