@@ -1,0 +1,229 @@
+From a897b0ecab130619734d2d2c5bb265615ebad7bc Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 15:14:46 +0100
+Subject: [PATCH 164/164] webrender: ES 2.0 with fewer texture units than
+ sampler slots
+
+WebRender's sampler slots go up to 10, the SGX530 has 8 texture units.
+Slots beyond the GPU's units are given, per program, units it leaves
+free (the shaders use at most 8 samplers, except YUV with an alpha
+pass); before each draw the device binds the program's textures to its
+units where another program's use left something else there.
+WR_TEXTURE_UNITS limits the units to test this on another GPU.
+
+Also no pixel buffer unbinding after uploads on ES 2.0.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/device/gl.rs | 86 +++++++++++++++++++++++++++++--
+ 1 file changed, 83 insertions(+), 3 deletions(-)
+
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index ac2706cc2603..bb0e26afd793 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -1227,6 +1227,12 @@ pub struct Device {
+     texture_units: usize,
+     /// ES 2.0 cannot map buffers: repeated instances are built here.
+     instance_scratch: Vec<u8>,
++    /// With fewer texture units than WebRender's samplers (ES 2.0 GPUs):
++    /// the texture of each sampler slot, each program's (slot, unit)
++    /// pairs, and the bound program's, checked before each draw.
++    slot_textures: [(gl::GLuint, gl::GLenum); 16],
++    program_units: FastHashMap<gl::GLuint, Vec<(usize, usize)>>,
++    bound_program_units: Vec<(usize, usize)>,
+     bound_program: gl::GLuint,
+     bound_program_name: Rc<std::ffi::CString>,
+     bound_vao: gl::GLuint,
+@@ -1645,7 +1651,8 @@ impl Device {
+         unsafe {
+             gl.get_integer_v(gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mut max_units);
+         }
+-        let texture_units = (max_units[0].max(1) as usize).min(16);
++        let texture_units = (max_units[0].max(1) as usize)
++            .min(std::env::var("WR_TEXTURE_UNITS").ok().and_then(|v| v.parse().ok()).unwrap_or(16));
+         let mut extensions = Vec::new();
+         if is_gles2 {
+             // ES 2.0 has no indexed extension query
+@@ -2146,6 +2153,9 @@ impl Device {
+             bound_textures: [0; 16],
+             texture_units,
+             instance_scratch: Vec::new(),
++            slot_textures: [(0, gl::TEXTURE_2D); 16],
++            program_units: FastHashMap::default(),
++            bound_program_units: Vec::new(),
+             bound_program: 0,
+             bound_program_name: Rc::new(std::ffi::CString::new("").unwrap()),
+             bound_vao: 0,
+@@ -2446,6 +2456,11 @@ impl Device {
+     ) {
+         debug_assert!(self.inside_frame);
+ 
++        self.slot_textures[slot.0] = (id, target);
++        if slot.0 >= self.texture_units {
++            return;
++        }
++
+         if self.bound_textures[slot.0] != id || set_swizzle.is_some() || image_rendering.is_some() {
+             self.gl.active_texture(gl::TEXTURE0 + slot.0 as gl::GLuint);
+             // The android emulator gets confused if you don't explicitly unbind any texture
+@@ -2817,10 +2832,32 @@ impl Device {
+             self.gl.use_program(program.id);
+             self.bound_program = program.id;
+             self.bound_program_name = program.source_info.full_name_cstr.clone();
++            if self.texture_units < self.bound_textures.len() {
++                self.bound_program_units =
++                    self.program_units.get(&program.id).cloned().unwrap_or_default();
++            }
+         }
+         true
+     }
+ 
++    /// Binds the bound program's sampler textures to the units it reads
++    /// them from, where another program's use left something else there.
++    fn bind_program_textures(&mut self) {
++        let mut changed = false;
++        for &(slot, unit) in &self.bound_program_units {
++            let (id, target) = self.slot_textures[slot];
++            if id != 0 && self.bound_textures[unit] != id {
++                self.gl.active_texture(gl::TEXTURE0 + unit as gl::GLuint);
++                self.gl.bind_texture(target, id);
++                self.bound_textures[unit] = id;
++                changed = true;
++            }
++        }
++        if changed {
++            self.gl.active_texture(gl::TEXTURE0);
++        }
++    }
++
+     pub fn create_texture(
+         &mut self,
+         target: ImageBufferKind,
+@@ -3292,6 +3329,11 @@ impl Device {
+                 *bound_texture = 0;
+             }
+         }
++        for slot_texture in &mut self.slot_textures {
++            if slot_texture.0 == texture.id {
++                slot_texture.0 = 0;
++            }
++        }
+ 
+         self.textures_deleted += 1;
+ 
+@@ -3305,6 +3347,7 @@ impl Device {
+     }
+ 
+     pub fn delete_program(&mut self, mut program: Program) {
++        self.program_units.remove(&program.id);
+         self.gl.delete_program(program.id);
+         program.id = 0;
+     }
+@@ -3381,6 +3424,33 @@ impl Device {
+         // bind_program() must be called before calling bind_shader_samplers
+         assert_eq!(self.bound_program, program.id);
+ 
++        if self.texture_units < self.bound_textures.len() {
++            // Slots beyond the GPU's units go to units this program leaves free.
++            let used: Vec<(gl::GLint, usize)> = bindings
++                .iter()
++                .map(|b| (self.gl.get_uniform_location(program.id, b.0), b.1.into().0))
++                .filter(|&(location, _)| location != -1)
++                .collect();
++            let mut taken: Vec<usize> = used.iter().map(|&(_, slot)| slot).filter(|&s| s < self.texture_units).collect();
++            let mut units = Vec::new();
++            for &(location, slot) in &used {
++                let unit = if slot < self.texture_units {
++                    slot
++                } else if let Some(free) = (0 .. self.texture_units).find(|u| !taken.contains(u)) {
++                    taken.push(free);
++                    free
++                } else {
++                    warn!("{:?}: no texture unit left for sampler slot {}", program.source_info.full_name_cstr, slot);
++                    continue;
++                };
++                self.gl.uniform_1i(location, unit as gl::GLint);
++                units.push((slot, unit));
++            }
++            self.program_units.insert(program.id, units.clone());
++            self.bound_program_units = units;
++            return;
++        }
++
+         for binding in bindings {
+             let u_location = self.gl.get_uniform_location(program.id, binding.0);
+             if u_location != -1 {
+@@ -3936,6 +4006,7 @@ impl Device {
+ 
+     pub fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -3959,6 +4030,7 @@ impl Device {
+ 
+     pub fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -3982,6 +4054,7 @@ impl Device {
+ 
+     pub fn draw_nonindexed_points(&mut self, first_vertex: i32, vertex_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4000,6 +4073,7 @@ impl Device {
+ 
+     pub fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4018,6 +4092,7 @@ impl Device {
+ 
+     pub fn draw_indexed_triangles(&mut self, index_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4041,6 +4116,7 @@ impl Device {
+ 
+     pub fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32) {
+         debug_assert!(self.inside_frame);
++        self.bind_program_textures();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4792,7 +4868,9 @@ impl UploadPBOPool {
+             self.orphaned_buffers.push(buffer.pbo);
+         }
+ 
+-        device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        if !device.capabilities.is_gles2 {
++            device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        }
+     }
+ 
+     /// Frees all allocated buffers in response to a memory pressure event.
+@@ -5076,7 +5154,9 @@ impl<'a> TextureUploader<'a> {
+             Self::flush_buffer(device, self.pbo_pool, buffer);
+         }
+ 
+-        device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        if !device.capabilities.is_gles2 {
++            device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
++        }
+     }
+ 
+     fn update_impl(device: &mut Device, chunk: UploadChunk) {
+-- 
+2.56.0
+
