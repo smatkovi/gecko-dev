@@ -1,0 +1,55 @@
+From ebe969ea68d3a1cc1df135e0bbe2f3580c51fcd9 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 20:11:08 +0100
+Subject: [PATCH 174/175] wrench: WRENCH_GL_PROFILE=sync; load
+ glDiscardFramebufferEXT for invalidation on ES 2.0
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/main.rs | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/wr/wrench/src/main.rs b/gfx/wr/wrench/src/main.rs
+index bd76fe8f2be0..efc750344614 100644
+--- a/gfx/wr/wrench/src/main.rs
++++ b/gfx/wr/wrench/src/main.rs
+@@ -418,8 +418,18 @@ pub mod glring {
+     }
+ 
+     pub fn wrap(fns: Rc<dyn gl::Gl>) -> Rc<dyn gl::Gl> {
+-        if std::env::var_os("WRENCH_GL_PROFILE").is_some() {
+-            return gl::ProfilingGl::wrap(fns, std::time::Duration::ZERO, |name, d| {
++        if let Some(mode) = std::env::var_os("WRENCH_GL_PROFILE") {
++            // "sync": glFinish after every call, its time added to that call,
++            // so GPU work counts for the call that issued it
++            let sync = mode == "sync";
++            let inner = fns.clone();
++            return gl::ProfilingGl::wrap(fns, std::time::Duration::ZERO, move |name, d| {
++                let mut d = d;
++                if sync && name != "finish" {
++                    let t = std::time::Instant::now();
++                    inner.finish();
++                    d += t.elapsed();
++                }
+                 TOTALS.with(|t| {
+                     let mut t = t.borrow_mut();
+                     let e = t.entry(name.as_ptr() as usize).or_insert((name.len(), 0, std::time::Duration::ZERO));
+@@ -663,6 +673,15 @@ fn load_gl_fns(is_gles: bool, gl_display: &impl GlDisplay) -> Rc<dyn gl::Gl> {
+         };
+         unsafe {
+             gl::GlesFns::load_with(|symbol| {
++                // ES 2.0 discards framebuffer contents through
++                // GL_EXT_discard_framebuffer, with the same signature; a
++                // driver may hand out the ES 3.0 name as a stub doing nothing.
++                if symbol == "glInvalidateFramebuffer" {
++                    let p = find("glDiscardFramebufferEXT");
++                    if !p.is_null() {
++                        return p;
++                    }
++                }
+                 let p = find(symbol);
+                 if !p.is_null() {
+                     return p;
+-- 
+2.56.0
+

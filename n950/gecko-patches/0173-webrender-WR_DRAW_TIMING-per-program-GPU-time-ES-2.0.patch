@@ -1,0 +1,245 @@
+From 9c534b2ae52a752815000f889dc3d3746b956e3b Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 20:11:07 +0100
+Subject: [PATCH 173/175] webrender: WR_DRAW_TIMING per-program GPU time; ES
+ 2.0 discard via EXT_discard_framebuffer
+
+WR_DRAW_TIMING fences every draw call and target clear with glFinish and
+prints the time per program at the end of each frame. Render target
+invalidation now runs where the driver can discard framebuffer contents,
+which on ES 2.0 is GL_EXT_discard_framebuffer.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/device/gl.rs | 75 +++++++++++++++++++++++++++++--
+ 1 file changed, 72 insertions(+), 3 deletions(-)
+
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index b16cc0aa74d1..fc03e8715cbd 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -1135,6 +1135,10 @@ pub struct Capabilities {
+     /// Whether GPU timer and sample queries work (on ES 2.0 only with
+     /// GL_EXT_disjoint_timer_query).
+     pub supports_gpu_queries: bool,
++    /// Whether framebuffer contents can be discarded (glInvalidateFramebuffer;
++    /// on ES 2.0 GL_EXT_discard_framebuffer, whose glDiscardFramebufferEXT the
++    /// embedder loads for it), so a tile-based GPU need not store them.
++    pub supports_discard_framebuffer: bool,
+     /// Whether we can use SSBOs.
+     pub supports_shader_storage_object: bool,
+     /// Whether to enforce that texture uploads be batched regardless of what
+@@ -1249,6 +1253,9 @@ pub struct Device {
+     /// ES 2.0: the frame in which each float texture was last re-allocated
+     /// (see update_impl_gles2).
+     float_textures_renewed: FastHashMap<gl::GLuint, GpuFrameId>,
++    /// WR_DRAW_TIMING: GPU time per program, each draw call fenced with
++    /// glFinish on both sides, printed and reset at the end of each frame.
++    draw_timing: Option<RefCell<FastHashMap<String, (u32, std::time::Duration)>>>,
+     program_units: FastHashMap<gl::GLuint, Vec<ProgramSampler>>,
+     bound_program: gl::GLuint,
+     bound_program_name: Rc<std::ffi::CString>,
+@@ -2134,6 +2141,7 @@ impl Device {
+             capabilities: Capabilities {
+                 is_gles2,
+                 supports_gpu_queries: !is_gles2 || supports_extension(&extensions, "GL_EXT_disjoint_timer_query"),
++                supports_discard_framebuffer: !is_gles2 || supports_extension(&extensions, "GL_EXT_discard_framebuffer"),
+                 supports_multisampling: false, //TODO
+                 supports_copy_image_sub_data,
+                 supports_color_buffer_float,
+@@ -2175,6 +2183,7 @@ impl Device {
+             instance_scratch: Vec::new(),
+             slot_textures: [(0, gl::TEXTURE_2D, DeviceIntSize::zero()); 16],
+             float_textures_renewed: FastHashMap::default(),
++            draw_timing: std::env::var_os("WR_DRAW_TIMING").map(|_| RefCell::new(FastHashMap::default())),
+             program_units: FastHashMap::default(),
+             bound_program: 0,
+             bound_program_name: Rc::new(std::ffi::CString::new("").unwrap()),
+@@ -2858,6 +2867,31 @@ impl Device {
+         true
+     }
+ 
++    fn draw_timing_start(&self) -> Option<std::time::Instant> {
++        self.draw_timing.as_ref().map(|_| {
++            self.gl.finish();
++            std::time::Instant::now()
++        })
++    }
++
++    fn draw_timing_end(&self, start: Option<std::time::Instant>) {
++        if start.is_some() {
++            let name = self.bound_program_name.to_string_lossy().into_owned();
++            self.draw_timing_note(start, name);
++        }
++    }
++
++    fn draw_timing_note(&self, start: Option<std::time::Instant>, name: String) {
++        if let (Some(start), Some(timing)) = (start, self.draw_timing.as_ref()) {
++            self.gl.finish();
++            let elapsed = start.elapsed();
++            let mut timing = timing.borrow_mut();
++            let entry = timing.entry(name).or_insert((0, std::time::Duration::ZERO));
++            entry.0 += 1;
++            entry.1 += elapsed;
++        }
++    }
++
+     /// Binds the bound program's sampler textures to the units it reads
+     /// them from, where another program's use left something else there.
+     fn bind_program_textures(&mut self) {
+@@ -3091,7 +3125,7 @@ impl Device {
+                 (&texture.fbo, &[gl::COLOR_ATTACHMENT0] as &[gl::GLenum])
+             };
+ 
+-            if let Some(fbo_id) = fbo.as_ref().filter(|_| !self.capabilities.is_gles2) {
++            if let Some(fbo_id) = fbo.as_ref().filter(|_| self.capabilities.supports_discard_framebuffer) {
+                 let original_bound_fbo = self.bound_draw_fbo;
+                 // Note: The invalidate extension may not be supported, in which
+                 // case this is a no-op. That's ok though, because it's just a
+@@ -3110,7 +3144,7 @@ impl Device {
+     /// to allow tiled GPUs to avoid writing the contents back to memory.
+     pub fn invalidate_depth_target(&mut self) {
+         assert!(self.depth_available);
+-        if self.capabilities.is_gles2 {
++        if !self.capabilities.supports_discard_framebuffer {
+             return;
+         }
+         let attachments = if self.bound_draw_fbo == self.default_draw_fbo {
+@@ -3118,7 +3152,7 @@ impl Device {
+         } else {
+             &[gl::DEPTH_ATTACHMENT] as &[gl::GLenum]
+         };
+-        self.gl.invalidate_framebuffer(gl::DRAW_FRAMEBUFFER, attachments);
++        self.gl.invalidate_framebuffer(fbo_target(FBOTarget::Draw, self.capabilities.is_gles2), attachments);
+     }
+ 
+     /// Notifies the device that a render target is about to be reused.
+@@ -4044,6 +4078,7 @@ impl Device {
+     pub fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4063,11 +4098,14 @@ impl Device {
+             gl::UNSIGNED_SHORT,
+             first_vertex as u32 * 2,
+         );
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4087,11 +4125,14 @@ impl Device {
+             gl::UNSIGNED_INT,
+             first_vertex as u32 * 4,
+         );
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn draw_nonindexed_points(&mut self, first_vertex: i32, vertex_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4106,11 +4147,14 @@ impl Device {
+         };
+ 
+         self.gl.draw_arrays(gl::POINTS, first_vertex, vertex_count);
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4125,11 +4169,14 @@ impl Device {
+         };
+ 
+         self.gl.draw_arrays(gl::LINES, first_vertex, vertex_count);
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn draw_indexed_triangles(&mut self, index_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4149,11 +4196,14 @@ impl Device {
+             gl::UNSIGNED_SHORT,
+             0,
+         );
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32) {
+         debug_assert!(self.inside_frame);
+         self.bind_program_textures();
++        let timing = self.draw_timing_start();
+         #[cfg(debug_assertions)]
+         debug_assert!(self.shader_is_ready);
+ 
+@@ -4174,9 +4224,20 @@ impl Device {
+             0,
+             instance_count,
+         );
++        drop(_guard);
++        self.draw_timing_end(timing);
+     }
+ 
+     pub fn end_frame(&mut self) {
++        if let Some(timing) = self.draw_timing.as_ref() {
++            let mut entries: Vec<_> = timing.borrow_mut().drain().collect();
++            entries.sort_by(|a, b| (b.1).1.cmp(&(a.1).1));
++            let total: std::time::Duration = entries.iter().map(|e| (e.1).1).sum();
++            println!("draw timing, frame {:?}: {:.1} ms", self.frame_id, total.as_secs_f64() * 1000.0);
++            for (name, (count, time)) in entries {
++                println!("  {:7.2} ms {:4}x  {}", time.as_secs_f64() * 1000.0, count, name);
++            }
++        }
+         self.reset_draw_target();
+         self.reset_read_target();
+ 
+@@ -4229,6 +4290,13 @@ impl Device {
+         }
+ 
+         if clear_bits != 0 {
++            let timing = self.draw_timing_start();
++            let what = format!(
++                "glClear {}{} {}",
++                if color.is_some() { "color" } else { "" },
++                if depth.is_some() { "+depth" } else { "" },
++                rect.map_or("whole target".to_string(), |r| format!("{}x{}", r.width(), r.height())),
++            );
+             match rect {
+                 Some(rect) => {
+                     self.gl.enable(gl::SCISSOR_TEST);
+@@ -4245,6 +4313,7 @@ impl Device {
+                     self.gl.clear(clear_bits);
+                 }
+             }
++            self.draw_timing_note(timing, what);
+         }
+     }
+ 
+-- 
+2.56.0
+

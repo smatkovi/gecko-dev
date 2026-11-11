@@ -1,0 +1,49 @@
+From eced9787a4c9a9a2b58c7d4b1bb7e6945b6ddc6e Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 20:17:08 +0100
+Subject: [PATCH 175/175] wrench: WRENCH_SHARED_SURFACE, WRENCH_TEXTURE_CACHE,
+ WRENCH_TILE_SIZE
+
+Sizes of the shared intermediate render targets, the texture cache
+atlases and the picture cache tiles, for measuring what a tile-based GPU
+pays per render target.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/wrench/src/wrench.rs | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/gfx/wr/wrench/src/wrench.rs b/gfx/wr/wrench/src/wrench.rs
+index f2a496091244..c90e0222d757 100644
+--- a/gfx/wr/wrench/src/wrench.rs
++++ b/gfx/wr/wrench/src/wrench.rs
+@@ -283,6 +283,26 @@ impl Wrench {
+             panic_on_gl_error: std::env::var_os("WRENCH_GL_ERRORS").is_some(),
+             ..Default::default()
+         };
++        let mut opts = opts;
++        let env_size = |name: &str| std::env::var(name).ok().and_then(|v| {
++            let mut it = v.split('x').map(|n| n.parse::<i32>().ok());
++            let w = it.next()??;
++            Some(DeviceIntSize::new(w, it.next().flatten().unwrap_or(w)))
++        });
++        if let Some(size) = env_size("WRENCH_SHARED_SURFACE") {
++            opts.max_shared_surface_size = size.width;
++        }
++        if let Some(size) = env_size("WRENCH_TILE_SIZE") {
++            opts.picture_tile_size = Some(size);
++        }
++        if let Some(size) = env_size("WRENCH_TEXTURE_CACHE") {
++            let n = size.width.max(512);
++            let c = &mut opts.texture_cache_config;
++            c.color8_linear_texture_size = n;
++            c.color8_glyph_texture_size = n;
++            c.alpha8_texture_size = n.min(c.alpha8_texture_size);
++            c.alpha8_glyph_texture_size = n;
++        }
+ 
+         // put an Awakened event into the queue to kick off the first frame
+         if let Some(ref _elp) = proxy {
+-- 
+2.56.0
+
