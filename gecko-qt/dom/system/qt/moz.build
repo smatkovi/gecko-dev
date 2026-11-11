@@ -9,7 +9,7 @@ if CONFIG['MOZ_ENABLE_QT5GEOPOSITION']:
         'moc_QTMLocationProvider.cpp',
         script='/build/qt/moc.py',
         inputs=['QTMLocationProvider.h'],
-        flags=[CONFIG['MOC']] + CONFIG['MOZ_QT_CFLAGS'],
+        flags=[CONFIG['MOC']] + CONFIG['MOZ_QT_CFLAGS'] + CONFIG['MOZ_QT_POSITIONING_CFLAGS'],
     )
 
     SOURCES += [
@@ -17,7 +17,7 @@ if CONFIG['MOZ_ENABLE_QT5GEOPOSITION']:
         'QTMLocationProvider.cpp',
     ]
 
-    CXXFLAGS += CONFIG['MOZ_QT_CFLAGS']
+    CXXFLAGS += CONFIG['MOZ_QT_CFLAGS'] + CONFIG['MOZ_QT_POSITIONING_CFLAGS']
 
     LOCAL_INCLUDES += [
         '/dom/geolocation',
