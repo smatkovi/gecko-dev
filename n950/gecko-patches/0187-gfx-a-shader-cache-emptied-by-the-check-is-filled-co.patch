@@ -1,0 +1,79 @@
+From 6a17b54ef6835c36590c3a4813131aed6ff6eb68 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 23:21:20 +0100
+Subject: [PATCH] gfx: a shader cache emptied by the check is filled completely
+ at that start
+
+Without gfx.webrender.precache-shaders the warmup only creates program
+objects, so a cache emptied for another build, device or driver (or in a
+new profile) filled up only with the programs that happened to be drawn.
+When no shipped cache matched, the warmup of that session now compiles
+and links every program (one per warmup step), which stores them all.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/config/gfxVars.h                    | 1 +
+ gfx/thebes/gfxUtils.cpp                 | 9 +++++++--
+ gfx/webrender_bindings/RenderThread.cpp | 5 ++++-
+ 3 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/gfx/config/gfxVars.h b/gfx/config/gfxVars.h
+index 98ed6a26aa40..ed5cf99e0073 100644
+--- a/gfx/config/gfxVars.h
++++ b/gfx/config/gfxVars.h
+@@ -46,6 +46,7 @@ class MOZ_STACK_CLASS gfxVarsCollectUpdates;
+   _(UseWebRenderCompositor, bool, false)                           \
+   _(UseWebRenderProgramBinaryDisk, bool, false)                    \
+   _(ShouldWarmUpWebRenderProgramBinaries, bool, false)             \
++  _(FillWebRenderProgramBinaryDisk, bool, false)                   \
+   _(UseWebRenderOptimizedShaders, bool, false)                     \
+   _(UseWebRenderScissoredCacheClears, bool, true)                  \
+   _(WebRenderProfilerUI, nsCString, nsCString())                   \
+diff --git a/gfx/thebes/gfxUtils.cpp b/gfx/thebes/gfxUtils.cpp
+index 841584bb182e..eea6c216eadc 100644
+--- a/gfx/thebes/gfxUtils.cpp
++++ b/gfx/thebes/gfxUtils.cpp
+@@ -1713,7 +1713,9 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
+   // Program binaries shipped next to the application (compiled once on the
+   // target device, e.g. the N950's PowerVR SGX530 at about 1.5 s a program)
+   // refill the emptied cache when they were made for this build, device and
+-  // driver; otherwise the shader warmup compiles them during this session.
++  // driver; otherwise the shader warmup compiles all of them during this
++  // session.
++  bool seeded = false;
+   nsCOMPtr<nsIFile> shippedDir;
+   if (NS_SUCCEEDED(
+           NS_GetSpecialDirectory(NS_GRE_DIR, getter_AddRefs(shippedDir))) &&
+@@ -1729,7 +1731,10 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
+     stamp.Append(u'\n');
+     stamp.Append(driverVersion);
+     stamp.Append(u'\n');
+-    wr::seed_program_binary_disk_cache(&path, &shippedPath, &stamp);
++    seeded = wr::seed_program_binary_disk_cache(&path, &shippedPath, &stamp);
++  }
++  if (!seeded) {
++    gfxVars::SetFillWebRenderProgramBinaryDisk(true);
+   }
+ }
+ 
+diff --git a/gfx/webrender_bindings/RenderThread.cpp b/gfx/webrender_bindings/RenderThread.cpp
+index ecc716db1003..a2f6ec32bae6 100644
+--- a/gfx/webrender_bindings/RenderThread.cpp
++++ b/gfx/webrender_bindings/RenderThread.cpp
+@@ -1557,9 +1557,12 @@ void RenderThread::MaybeEnableGLDebugMessage(gl::GLContext* aGLContext) {
+ WebRenderShaders::WebRenderShaders(gl::GLContext* gl,
+                                    WebRenderProgramCache* programCache) {
+   mGL = gl;
++  // A shader cache emptied at this start (another build, device or driver)
++  // is filled again by a warmup that compiles every program.
+   mShaders =
+       wr_shaders_new(gl, programCache ? programCache->Raw() : nullptr,
+-                     StaticPrefs::gfx_webrender_precache_shaders_AtStartup());
++                     StaticPrefs::gfx_webrender_precache_shaders_AtStartup() ||
++                         gfx::gfxVars::FillWebRenderProgramBinaryDisk());
+ }
+ 
+ WebRenderShaders::~WebRenderShaders() {
+-- 
+2.56.0
+
