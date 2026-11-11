@@ -1,0 +1,93 @@
+From fccb8a9b2b1bad299928b1af2cce9b000a2f4fc5 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Wed, 11 Nov 2026 18:30:01 +0100
+Subject: [PATCH 170/171] webrender: ES 2.0 vertex integers zeroed, quad flags
+ unpacked once
+
+On the PowerVR SGX530 a translucent quad came out grey and an opaque one
+black: v_flags.y, written by no quad shader, is an unset global in the
+ES 1.00 vertex shader, undefined in GLSL ES; Mesa reads zero, the SGX
+garbage, which the packing (1024 * y) spread into the mask and edge bits.
+The integer globals standing in for varyings start at zero now.
+
+The quad fragment shader unpacks its flags once, at the start of main(),
+instead of at every use: about half the raster time of simple quads on
+the SGX530.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/ps_quad.glsl          | 16 +++++++++++-----
+ gfx/wr/webrender/res/ps_quad_gradient.glsl |  2 +-
+ gfx/wr/webrender_build/src/shader.rs       |  4 ++--
+ 3 files changed, 14 insertions(+), 8 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/ps_quad.glsl b/gfx/wr/webrender/res/ps_quad.glsl
+index be1a5998367a..84e3c2bf0c07 100644
+--- a/gfx/wr/webrender/res/ps_quad.glsl
++++ b/gfx/wr/webrender/res/ps_quad.glsl
+@@ -53,16 +53,19 @@ varying highp vec4 v_local_pos_flags;
+ #define vLocalPos v_local_pos_flags.xy
+ #define v_quad_spare v_local_pos_flags.w
+ #ifdef WR_VERTEX_SHADER
+-ivec4 v_flags;
++// zero: not every shader writes every component, and an unwritten global
++// is undefined in GLSL ES (the SGX530 leaves garbage there)
++ivec4 v_flags = ivec4(0);
+ #define WR_VS_FINISH \
+     v_local_pos_flags.z = float(v_flags.z + 2 * v_flags.w + 4 * v_flags.x + 1024 * v_flags.y);
+ #else
+-ivec4 wr_quad_flags() {
++// unpacked once per fragment, at the start of main()
++ivec4 v_flags;
++void wr_unpack_quad_flags() {
+     float f = floor(v_local_pos_flags.z + 0.5);
+-    return ivec4(mod(floor(f / 4.0), 256.0), floor(f / 1024.0),
+-                 mod(f, 2.0), mod(floor(f / 2.0), 2.0));
++    v_flags = ivec4(mod(floor(f / 4.0), 256.0), floor(f / 1024.0),
++                    mod(f, 2.0), mod(floor(f / 2.0), 2.0));
+ }
+-#define v_flags wr_quad_flags()
+ #endif
+ #else
+ flat varying lowp ivec4 v_flags;
+@@ -457,6 +460,9 @@ float antialiasing_fragment() {
+ }
+ 
+ void main() {
++#if __VERSION__ == 100
++    wr_unpack_quad_flags();
++#endif
+     vec4 base_color = v_color;
+     base_color *= antialiasing_fragment();
+     vec4 output_color = pattern_fragment(base_color);
+diff --git a/gfx/wr/webrender/res/ps_quad_gradient.glsl b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+index 9abc1248ac25..75e4da7947f8 100644
+--- a/gfx/wr/webrender/res/ps_quad_gradient.glsl
++++ b/gfx/wr/webrender/res/ps_quad_gradient.glsl
+@@ -24,7 +24,7 @@ flat varying highp vec4 v_flat_data;
+ // ES 2.0, 8 varying vectors: the header goes into v_flat_data.w (kind,
+ // extend mode, stop count) and the quad's spare component (colors address).
+ #ifdef WR_VERTEX_SHADER
+-ivec4 v_gradient_header;
++ivec4 v_gradient_header = ivec4(0);
+ #define WR_VS_FINISH2 \
+     v_flat_data.w = float(v_gradient_header.x + 4 * v_gradient_header.z + 16 * v_gradient_header.y); \
+     v_quad_spare = float(v_gradient_header.w);
+diff --git a/gfx/wr/webrender_build/src/shader.rs b/gfx/wr/webrender_build/src/shader.rs
+index 2ba8f1a5d56b..59d6020872bb 100644
+--- a/gfx/wr/webrender_build/src/shader.rs
++++ b/gfx/wr/webrender_build/src/shader.rs
+@@ -228,8 +228,8 @@ impl Gles2Rewriter {
+                 return match self.kind {
+                     ShaderKind::Vertex => {
+                         format!(
+-                            "varying highp {} {}_f;\n{} {};\n#define WR_INT_VARYING_{}",
+-                            float_ty, name, ty, name, name
++                            "varying highp {} {}_f;\n{} {} = {}(0);\n#define WR_INT_VARYING_{}",
++                            float_ty, name, ty, name, ty, name
+                         )
+                     }
+                     ShaderKind::Fragment => format!(
+-- 
+2.56.0
+
