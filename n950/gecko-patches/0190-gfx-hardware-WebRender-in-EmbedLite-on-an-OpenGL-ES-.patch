@@ -1,0 +1,107 @@
+From 93ae4c7dd11099711b33d1e424490228d95c8cbd Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 12:27:36 +0100
+Subject: [PATCH 190/191] gfx: hardware WebRender in EmbedLite on an OpenGL ES
+ 2.0 Qt EGL display
+
+The PowerVR SGX530 (Nokia N950, Mesa EGL over the PVR DDK) has no ES 3
+configs. Config selection now falls back from ES 3 to ES 2 in CreateConfig
+(the Qt display check) and in CreateWithoutSurfaceForApi (headless
+contexts on a display without GTK's no-config path).
+
+On any borrowed Qt display, not only libhybris, the EmbedLite compositor
+reuses RenderThread's SingletonGL: WebRender's shared shader programs live
+in that context, and a second unshared context failed every lazily linked
+program with GL_INVALID_VALUE.
+
+When WebRender ends up in software on Qt, the reason is printed, since
+EmbedLite has no about:support.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/gl/GLContextProviderEGL.cpp | 21 +++++++++++++++++----
+ gfx/thebes/gfxPlatform.cpp      |  8 ++++++++
+ 2 files changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index a71b924bbcee..e1d5d24c6e96 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp
+@@ -1086,6 +1086,11 @@ bool CreateConfig(EglDisplay& aEgl, EGLConfig* aConfig, int32_t aDepth,
+   }
+ 
+   if (!aEgl.fChooseConfig(attribs.data(), configs, ncfg, &ncfg) || ncfg < 1) {
++    if (aUseGles3) {
++      // OpenGL ES 2.0 only (PowerVR SGX530); WebRender has an ES 2.0 path.
++      return CreateConfig(aEgl, aConfig, aDepth, aEnableDepthBuffer, aUseGles,
++                          /* aUseGles3 */ false, aAllowFallback);
++    }
+     return false;
+   }
+ 
+@@ -1165,6 +1170,8 @@ bool QtEGLDisplayRequiresSoftwareWebRender() {
+     return false;
+   }
+ 
++  // WebRender has an OpenGL ES 2.0 path (PowerVR SGX530), so an ES 2.0
++  // config is enough (CreateConfig falls back to one).
+   EGLConfig config;
+   return !CreateConfig(*egl, &config, /* aDepth */ 32,
+                        /* aEnableDepthBuffer */ false,
+@@ -1365,7 +1372,14 @@ RefPtr<GLContextEGL> GLContextEGL::CreateWithoutSurfaceForApi(
+   }
+ #endif
+ 
+-  const EGLConfig surfaceConfig = ChooseConfig(*egl, desc, useGles);
++  auto configDesc = GLContextCreateDesc{desc};
++  EGLConfig surfaceConfig = ChooseConfig(*egl, configDesc, useGles);
++  if (surfaceConfig == EGL_NO_CONFIG && useGles &&
++      bool(configDesc.flags & CreateContextFlags::PREFER_ES3)) {
++    // OpenGL ES 2.0 only (PowerVR SGX530); WebRender has an ES 2.0 path.
++    configDesc.flags &= ~CreateContextFlags::PREFER_ES3;
++    surfaceConfig = ChooseConfig(*egl, configDesc, useGles);
++  }
+   if (surfaceConfig == EGL_NO_CONFIG) {
+     if (isBorrowed) {
+       *out_failureId = "FEATURE_FAILURE_EGL_BORROWED_CONFIG"_ns;
+@@ -1406,7 +1420,7 @@ RefPtr<GLContextEGL> GLContextEGL::CreateWithoutSurfaceForApi(
+     return nullptr;
+   }
+ 
+-  auto fullDesc = GLContextDesc{desc};
++  auto fullDesc = GLContextDesc{configDesc};
+   fullDesc.isOffscreen = true;
+   RefPtr<GLContextEGL> gl = GLContextEGL::CreateGLContext(
+       egl, fullDesc, surfaceConfig, surface, useGles, contextConfig,
+@@ -1495,8 +1509,7 @@ already_AddRefed<GLContext> GLContextProviderEGL::CreateHeadless(
+         *out_failureId = "FEATURE_FAILURE_EGL_BORROWED_DISPLAY"_ns;
+         return nullptr;
+       }
+-      if (isHybris &&
+-          display->mOwnership == EglDisplay::Ownership::Borrowed &&
++      if (display->mOwnership == EglDisplay::Ownership::Borrowed &&
+           requireGles3) {
+         // In the WebRender compositor flow, the active borrowed display
+         // already backs RenderThread's SingletonGL. WebRender creates its
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+index fbd3fbddd0e3..9ce5bfb45430 100644
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -2654,6 +2654,14 @@ void gfxPlatform::InitWebRenderConfig() {
+ 
+   bool hasHardware = gfxConfig::IsEnabled(Feature::WEBRENDER);
+ 
++#ifdef MOZ_WIDGET_QT
++  if (!hasHardware) {
++    const FeatureState& wr = gfxConfig::GetFeature(Feature::WEBRENDER);
++    printf_stderr("WebRender in software: %s (%s)\n", wr.GetFailureId().get(),
++                  wr.GetFailureMessage() ? wr.GetFailureMessage() : "");
++  }
++#endif
++
+ #ifdef MOZ_WIDGET_GTK
+   // We require a hardware driver to back the GL context unless the user forced
+   // on WebRender.
+-- 
+2.56.0
+
