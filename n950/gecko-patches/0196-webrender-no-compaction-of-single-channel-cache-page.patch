@@ -1,0 +1,78 @@
+From 7e969c1edb35477fcab33ecaa4a5aec76fdd4749 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 18:10:12 +0100
+Subject: [PATCH 196/197] webrender: no compaction of single-channel cache
+ pages on OpenGL ES 2.0
+
+Compaction moves entries between texture cache pages by drawing into
+them. The PowerVR SGX530's driver loses what an R8 texture got through
+glTexSubImage2D once something is drawn into it (gles2-subimage in the
+n950 repository shows it); RGBA textures keep it. TextureCacheConfig gets
+compact_single_channel, false for ES 2.0 contexts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/texture_cache.rs | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/gfx/wr/webrender/src/texture_cache.rs b/gfx/wr/webrender/src/texture_cache.rs
+index 77e1f3a312ac..aa62aacbc162 100644
+--- a/gfx/wr/webrender/src/texture_cache.rs
++++ b/gfx/wr/webrender/src/texture_cache.rs
+@@ -528,6 +528,11 @@ pub struct TextureCacheConfig {
+     pub alpha8_texture_size: i32,
+     pub alpha8_glyph_texture_size: i32,
+     pub alpha16_texture_size: i32,
++    /// Whether compaction may move entries between the pages of the
++    /// single-channel (R8, R16) textures, which draws into them. The PowerVR
++    /// SGX530's driver (OpenGL ES 2.0) loses what such a texture got by
++    /// glTexSubImage2D once something is drawn into it.
++    pub compact_single_channel: bool,
+ }
+ 
+ impl TextureCacheConfig {
+@@ -538,6 +543,7 @@ impl TextureCacheConfig {
+         alpha8_texture_size: 1024,
+         alpha8_glyph_texture_size: 2048,
+         alpha16_texture_size: 512,
++        compact_single_channel: true,
+     };
+ }
+ 
+@@ -599,6 +605,9 @@ pub struct TextureCache {
+     /// Memory usage of allocated entries in all of the shared or standalone
+     /// textures. Includes both manually and automatically evicted entries.
+     bytes_allocated: [usize ; BudgetType::COUNT],
++
++    /// TextureCacheConfig::compact_single_channel
++    compact_single_channel: bool,
+ }
+ 
+ impl TextureCache {
+@@ -639,6 +648,7 @@ impl TextureCache {
+             manual_entries: FreeList::new(),
+             manual_handles: Vec::new(),
+             bytes_allocated: [0 ; BudgetType::COUNT],
++            compact_single_channel: config.compact_single_channel,
+         }
+     }
+ 
+@@ -770,6 +780,15 @@ impl TextureCache {
+         // Pick a texture type on which to try to run the compaction logic this frame.
+         let idx = self.shared_textures.next_compaction_idx;
+ 
++        let single_channel = matches!(
++            allocator_lists[idx].texture_parameters().formats.internal,
++            ImageFormat::R8 | ImageFormat::R16
++        );
++        if single_channel && !self.compact_single_channel {
++            self.shared_textures.next_compaction_idx = (idx + 1) % allocator_lists.len();
++            return;
++        }
++
+         // Number of moved pixels after which we stop attempting to move more items for this frame.
+         // The constant is up for adjustment, the main goal is to avoid causing frame spikes on
+         // low end GPUs.
+-- 
+2.56.0
+
