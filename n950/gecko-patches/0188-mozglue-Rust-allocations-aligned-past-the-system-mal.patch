@@ -1,0 +1,46 @@
+From 103e51af75b78cbf88f17a7e4ac626441aac3d70 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 09:08:46 +0100
+Subject: [PATCH 188/189] mozglue: Rust allocations aligned past the system
+ malloc's alignment without mozjemalloc
+
+GeckoAlloc assumed malloc aligns to 16, which mozjemalloc does. Without
+it (--disable-jemalloc, as for EmbedLite) glibc aligns to 2 * sizeof(void*),
+8 on 32-bit ARM: 16-aligned Rust types got 8-aligned memory, and a NEON
+store with a :128 alignment hint crashed the EmbedLite shell on the N950
+(SIGBUS, alignment exception). Above the system alignment, memalign now.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ mozglue/static/rust/lib.rs | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/mozglue/static/rust/lib.rs b/mozglue/static/rust/lib.rs
+index 783d4a6d2c75..9f8499ba7e10 100644
+--- a/mozglue/static/rust/lib.rs
++++ b/mozglue/static/rust/lib.rs
+@@ -168,11 +168,18 @@ unsafe fn memalign(align: usize, size: usize) -> *mut c_void {
+ 
+ pub struct GeckoAlloc;
+ 
++// mozjemalloc guarantees a minimum alignment of 16 for all sizes, except
++// for size classes below 16 (4 and 8). Without it, the system malloc gives
++// 2 * sizeof(void*) (glibc), which is 8 on 32-bit ARM: 16-aligned types got
++// 8-aligned memory there, and NEON stores with alignment hints faulted.
++#[cfg(feature = "moz_memory")]
++const MALLOC_ALIGN: usize = 16;
++#[cfg(not(feature = "moz_memory"))]
++const MALLOC_ALIGN: usize = 2 * std::mem::size_of::<usize>();
++
+ #[inline(always)]
+ fn need_memalign(layout: Layout) -> bool {
+-    // mozjemalloc guarantees a minimum alignment of 16 for all sizes, except
+-    // for size classes below 16 (4 and 8).
+-    layout.align() > layout.size() || layout.align() > 16
++    layout.align() > layout.size() || layout.align() > MALLOC_ALIGN
+ }
+ 
+ unsafe impl GlobalAlloc for GeckoAlloc {
+-- 
+2.56.0
+
