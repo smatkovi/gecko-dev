@@ -632,10 +632,9 @@ BrowserChildHelper::UpdateFrameHandler(const RepaintRequest &aRequest) {
 
 void
 BrowserChildHelper::ProcessUpdateFrame(const RepaintRequest &aRequest) {
-  if (!mBrowserChildMessageManager) {
-    return;
-  }
-
+  // Not tied to the message manager, which only exists once the embedder
+  // loads frame scripts: without the update, APZ scrolls past the painted
+  // display port and the view turns white.
   APZCCallbackHelper::UpdateRootFrame(aRequest);
 }
 
