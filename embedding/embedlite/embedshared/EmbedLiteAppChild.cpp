@@ -27,6 +27,7 @@
 #include "EmbedLiteWindowThreadChild.h"
 #include "mozilla/Unused.h"
 #include "mozilla/layers/ImageBridgeChild.h"
+#include "mozilla/AvailableMemoryWatcher.h"
 
 using namespace mozilla::ipc;
 using namespace mozilla::layers;
@@ -38,6 +39,27 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(EmbedLiteJSON)
 NS_GENERIC_FACTORY_CONSTRUCTOR(EmbedLiteAppService)
 
 static EmbedLiteAppChild* sAppBaseChild = nullptr;
+
+// There are no tabs to unload, so the memory watcher's low-memory signal
+// (/proc/meminfo, browser.low_commit_space_threshold_*) becomes a
+// memory-pressure notification right away: Gecko drops its caches.
+class DropCachesOnLowMemory final : public nsITabUnloader
+{
+public:
+  NS_DECL_ISUPPORTS
+
+  NS_IMETHOD UnloadTabAsync() override
+  {
+    RefPtr<nsAvailableMemoryWatcherBase> watcher =
+      nsAvailableMemoryWatcherBase::GetSingleton();
+    return watcher->OnUnloadAttemptCompleted(NS_ERROR_NOT_AVAILABLE);
+  }
+
+private:
+  ~DropCachesOnLowMemory() = default;
+};
+
+NS_IMPL_ISUPPORTS(DropCachesOnLowMemory, nsITabUnloader)
 
 EmbedLiteAppChild*
 EmbedLiteAppChild::GetInstance()
@@ -80,6 +102,10 @@ EmbedLiteAppChild::Init(IToplevelProtocol* aTarget)
 
   mozilla::DebugOnly<nsresult> rv = InitAppService();
   MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  RefPtr<nsAvailableMemoryWatcherBase> memoryWatcher =
+    nsAvailableMemoryWatcherBase::GetSingleton();
+  memoryWatcher->RegisterTabUnloader(new DropCachesOnLowMemory());
 
   SendInitialized();
 

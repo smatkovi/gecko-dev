@@ -1,0 +1,194 @@
+From 29d296ccb6abe6de053782675c1bccfe06bdf417 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 14:08:46 +0100
+Subject: [PATCH 193/193] webrender: link again what the SGX530 refuses at
+ random on ES 2.0
+
+The PowerVR SGX530's driver (DDK 1.17) refuses now and then a program
+whose vertex and fragment shaders read the same sampler ("Uniform
+variable sGpuBufferF type/precision does not match"), a different
+program on each run: brush_blend, ps_quad_gradient or cs_svg_filter_node
+out of 51 variants. Linking the same program again fails again; shaders
+compiled afresh into a new program link (measured with gles2-link on the
+device).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/src/device/gl.rs | 151 +++++++++++++++++-------------
+ 1 file changed, 85 insertions(+), 66 deletions(-)
+
+diff --git a/gfx/wr/webrender/src/device/gl.rs b/gfx/wr/webrender/src/device/gl.rs
+index 47fc3cbf3505..afbd1cd7f13e 100644
+--- a/gfx/wr/webrender/src/device/gl.rs
++++ b/gfx/wr/webrender/src/device/gl.rs
+@@ -2752,82 +2752,101 @@ impl Device {
+ 
+         // If not, we need to do a normal compile + link pass.
+         if build_program {
+-            // Compile the vertex shader
+-            let vs_source = info.compute_source(self, ShaderKind::Vertex);
+-            let vs_id = match self.compile_shader(&info.full_name(), gl::VERTEX_SHADER, &vs_source) {
+-                    Ok(vs_id) => vs_id,
+-                    Err(err) => return Err(err),
+-                };
+-
+-            // Compile the fragment shader
+-            let fs_source = info.compute_source(self, ShaderKind::Fragment);
+-            let fs_id =
+-                match self.compile_shader(&info.full_name(), gl::FRAGMENT_SHADER, &fs_source) {
+-                    Ok(fs_id) => fs_id,
+-                    Err(err) => {
+-                        self.gl.delete_shader(vs_id);
+-                        return Err(err);
+-                    }
+-                };
++            let mut attempt = 0;
++            loop {
++                attempt += 1;
++                // Compile the vertex shader
++                let vs_source = info.compute_source(self, ShaderKind::Vertex);
++                let vs_id = match self.compile_shader(&info.full_name(), gl::VERTEX_SHADER, &vs_source) {
++                        Ok(vs_id) => vs_id,
++                        Err(err) => return Err(err),
++                    };
+ 
+-            // Check if shader source should be dumped
+-            if Some(info.base_filename) == self.dump_shader_source.as_ref().map(String::as_ref) {
+-                let path = std::path::Path::new(info.base_filename);
+-                std::fs::write(path.with_extension("vert"), vs_source).unwrap();
+-                std::fs::write(path.with_extension("frag"), fs_source).unwrap();
+-            }
++                // Compile the fragment shader
++                let fs_source = info.compute_source(self, ShaderKind::Fragment);
++                let fs_id =
++                    match self.compile_shader(&info.full_name(), gl::FRAGMENT_SHADER, &fs_source) {
++                        Ok(fs_id) => fs_id,
++                        Err(err) => {
++                            self.gl.delete_shader(vs_id);
++                            return Err(err);
++                        }
++                    };
+ 
+-            // Attach shaders
+-            self.gl.attach_shader(program.id, vs_id);
+-            self.gl.attach_shader(program.id, fs_id);
++                // Check if shader source should be dumped
++                if Some(info.base_filename) == self.dump_shader_source.as_ref().map(String::as_ref) {
++                    let path = std::path::Path::new(info.base_filename);
++                    std::fs::write(path.with_extension("vert"), vs_source).unwrap();
++                    std::fs::write(path.with_extension("frag"), fs_source).unwrap();
++                }
+ 
+-            // Bind vertex attributes
+-            let mut attr_index = 0;
+-            for attr in descriptor
+-                .vertex_attributes
+-                .iter()
+-                .chain(descriptor.instance_attributes.iter())
+-            {
+-                if self.capabilities.is_gles2 && attr.is_integer() {
+-                    for (name, _, _) in attr.gles2_parts() {
+-                        self.gl.bind_attrib_location(program.id, attr_index, &name);
++                // Attach shaders
++                self.gl.attach_shader(program.id, vs_id);
++                self.gl.attach_shader(program.id, fs_id);
++
++                // Bind vertex attributes
++                let mut attr_index = 0;
++                for attr in descriptor
++                    .vertex_attributes
++                    .iter()
++                    .chain(descriptor.instance_attributes.iter())
++                {
++                    if self.capabilities.is_gles2 && attr.is_integer() {
++                        for (name, _, _) in attr.gles2_parts() {
++                            self.gl.bind_attrib_location(program.id, attr_index, &name);
++                            attr_index += 1;
++                        }
++                    } else {
++                        self.gl.bind_attrib_location(program.id, attr_index, attr.name);
+                         attr_index += 1;
+                     }
+-                } else {
+-                    self.gl.bind_attrib_location(program.id, attr_index, attr.name);
+-                    attr_index += 1;
+                 }
+-            }
+ 
+-            if self.cached_programs.is_some() {
+-                self.gl.program_parameter_i(program.id, gl::PROGRAM_BINARY_RETRIEVABLE_HINT, gl::TRUE as gl::GLint);
+-            }
++                if self.cached_programs.is_some() {
++                    self.gl.program_parameter_i(program.id, gl::PROGRAM_BINARY_RETRIEVABLE_HINT, gl::TRUE as gl::GLint);
++                }
+ 
+-            // Link!
+-            self.gl.link_program(program.id);
++                // Link!
++                self.gl.link_program(program.id);
+ 
+-            // GL recommends detaching and deleting shaders once the link
+-            // is complete (whether successful or not). This allows the driver
+-            // to free any memory associated with the parsing and compilation.
+-            self.gl.detach_shader(program.id, vs_id);
+-            self.gl.detach_shader(program.id, fs_id);
+-            self.gl.delete_shader(vs_id);
+-            self.gl.delete_shader(fs_id);
++                // GL recommends detaching and deleting shaders once the link
++                // is complete (whether successful or not). This allows the driver
++                // to free any memory associated with the parsing and compilation.
++                self.gl.detach_shader(program.id, vs_id);
++                self.gl.detach_shader(program.id, fs_id);
++                self.gl.delete_shader(vs_id);
++                self.gl.delete_shader(fs_id);
+ 
+-            let mut link_status = [0];
+-            unsafe {
+-                self.gl.get_program_iv(program.id, gl::LINK_STATUS, &mut link_status);
+-            }
+-            if link_status[0] == 0 {
+-                let error_log = self.gl.get_program_info_log(program.id);
+-                error!(
+-                    "Failed to link shader program: {} (gl error 0x{:x})\n{}",
+-                    info.full_name(),
+-                    self.gl.get_error(),
+-                    error_log
+-                );
+-                self.gl.delete_program(program.id);
+-                return Err(ShaderError::Link(info.base_filename.to_owned(), error_log));
++                let mut link_status = [0];
++                unsafe {
++                    self.gl.get_program_iv(program.id, gl::LINK_STATUS, &mut link_status);
++                }
++                if link_status[0] != 0 {
++                    break;
++                }
++                {
++                    let error_log = self.gl.get_program_info_log(program.id);
++                    // The PowerVR SGX530's driver (DDK 1.17) now and then refuses a
++                    // program whose two shaders read the same sampler ("Uniform
++                    // variable ... type/precision does not match"), a different
++                    // program each run. Shaders compiled afresh into a new program
++                    // link.
++                    if self.capabilities.is_gles2 && attempt < 3 &&
++                        error_log.contains("type/precision does not match") {
++                        warn!("Linking {} again: {}", info.full_name(), error_log);
++                        self.gl.delete_program(program.id);
++                        program.id = self.gl.create_program();
++                        continue;
++                    }
++                    error!(
++                        "Failed to link shader program: {} (gl error 0x{:x})\n{}",
++                        info.full_name(),
++                        self.gl.get_error(),
++                        error_log
++                    );
++                    self.gl.delete_program(program.id);
++                    return Err(ShaderError::Link(info.base_filename.to_owned(), error_log));
++                }
+             }
+ 
+             if let Some(ref cached_programs) = self.cached_programs {
+-- 
+2.56.0
+

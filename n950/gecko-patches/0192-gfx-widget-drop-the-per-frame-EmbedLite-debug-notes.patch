@@ -1,0 +1,112 @@
+From 2f318cc28be1da33dab03dd642137f4d62fdd708 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 14:08:45 +0100
+Subject: [PATCH 192/193] gfx, widget: drop the per-frame EmbedLite debug notes
+
+Each gfxCriticalNote prints the whole note ring to stderr. The notes in
+the vsync dispatcher and source and at every EmbedLite compositor frame
+wrote several kilobytes per frame (6 MB within minutes on the N950's
+single core).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/thebes/SoftwareVsyncSource.cpp             | 2 --
+ gfx/thebes/VsyncSource.cpp                     | 2 --
+ gfx/webrender_bindings/RenderCompositorEGL.cpp | 3 ---
+ widget/VsyncDispatcher.cpp                     | 3 ---
+ 4 files changed, 10 deletions(-)
+
+diff --git a/gfx/thebes/SoftwareVsyncSource.cpp b/gfx/thebes/SoftwareVsyncSource.cpp
+index e338675cea1f..9cdcea26f70d 100644
+--- a/gfx/thebes/SoftwareVsyncSource.cpp
++++ b/gfx/thebes/SoftwareVsyncSource.cpp
+@@ -36,7 +36,6 @@ void SoftwareVsyncSource::EnableVsync() {
+       return;
+     }
+     mVsyncEnabled = true;
+-    gfxCriticalNote << "EL-Y5 SVS enabled(main)";
+ 
+     mVsyncThread->message_loop()->PostTask(
+         NewRunnableMethod("SoftwareVsyncSource::EnableVsync", this,
+@@ -44,7 +43,6 @@ void SoftwareVsyncSource::EnableVsync() {
+     return;
+   }
+ 
+-  gfxCriticalNote << "EL-Y6 SVS first tick";
+   MOZ_ASSERT(IsInSoftwareVsyncThread());
+   TimeStamp vsyncTime = TimeStamp::Now();
+   TimeStamp outputTime = vsyncTime + GetVsyncRate();
+diff --git a/gfx/thebes/VsyncSource.cpp b/gfx/thebes/VsyncSource.cpp
+index a6148b3da8c0..6b9adfdb289a 100644
+--- a/gfx/thebes/VsyncSource.cpp
++++ b/gfx/thebes/VsyncSource.cpp
+@@ -46,7 +46,6 @@ void VsyncSource::NotifyVsync(const TimeStamp& aVsyncTimestamp,
+ 
+ void VsyncSource::AddVsyncDispatcher(VsyncDispatcher* aVsyncDispatcher) {
+   MOZ_ASSERT(aVsyncDispatcher);
+-  gfxCriticalNote << "EL-Y3 VS::AddDispatcher";
+   {
+     auto state = mState.Lock();
+ 
+@@ -119,7 +118,6 @@ void VsyncSource::UpdateVsyncStatus() {
+     auto state = mState.Lock();
+     enableVsync = !state->mDispatchers.IsEmpty();
+   }
+-  gfxCriticalNote << "EL-Y4 VS enable=" << int(enableVsync);
+ 
+   if (enableVsync) {
+     EnableVsync();
+diff --git a/gfx/webrender_bindings/RenderCompositorEGL.cpp b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+index 99650fe83686..bdc5cab1758e 100644
+--- a/gfx/webrender_bindings/RenderCompositorEGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorEGL.cpp
+@@ -128,10 +128,8 @@ RenderCompositorEGL::~RenderCompositorEGL() {
+ 
+ #ifdef MOZ_EMBEDLITE
+ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
+-  gfxCriticalNote << "EL-E ensure entry";
+   MOZ_ASSERT(mUseEmbedLiteOffscreen);
+   const auto size = GetBufferSize().ToUnknownSize();
+-  gfxCriticalNote << "EL-Ensure size " << size.width << "x" << size.height;
+   if (size.IsEmpty()) {
+     return false;
+   }
+@@ -163,7 +161,6 @@ bool RenderCompositorEGL::EnsureEmbedLiteOffscreenTarget() {
+ #endif
+ 
+ bool RenderCompositorEGL::BeginFrame() {
+-  gfxCriticalNote << "EL-D BF entry off=" << int(mUseEmbedLiteOffscreen);
+ #ifdef MOZ_EMBEDLITE
+   if (mUseEmbedLiteOffscreen && !EnsureEmbedLiteOffscreenTarget()) {
+     gfxCriticalNote << "Failed to prepare EmbedLite offscreen target.";
+diff --git a/widget/VsyncDispatcher.cpp b/widget/VsyncDispatcher.cpp
+index 412203700d49..502ce604dec1 100644
+--- a/widget/VsyncDispatcher.cpp
++++ b/widget/VsyncDispatcher.cpp
+@@ -193,7 +193,6 @@ void VsyncDispatcher::NotifyMainThreadObservers(VsyncEvent aEvent) {
+ 
+ void VsyncDispatcher::AddVsyncObserver(VsyncObserver* aVsyncObserver) {
+   MOZ_ASSERT(aVsyncObserver);
+-  gfxCriticalNote << "EL-Y1 VD::AddObs";
+   {  // scope lock - called on PBackground thread or main thread
+     auto state = mState.Lock();
+     if (!state->mObservers.Contains(aVsyncObserver)) {
+@@ -206,7 +205,6 @@ void VsyncDispatcher::AddVsyncObserver(VsyncObserver* aVsyncObserver) {
+ 
+ void VsyncDispatcher::RemoveVsyncObserver(VsyncObserver* aVsyncObserver) {
+   MOZ_ASSERT(aVsyncObserver);
+-  gfxCriticalNote << "EL-Z3 VD::RemoveObs";
+   {  // scope lock - called on PBackground thread or main thread
+     auto state = mState.Lock();
+     state->mObservers.RemoveElement(aVsyncObserver);
+@@ -254,7 +252,6 @@ void VsyncDispatcher::UpdateVsyncStatus() {
+   // Call Add/RemoveVsyncDispatcher outside the lock, because it can re-enter
+   // into VsyncDispatcher::NotifyVsync.
+   if (needVsync && !wasObservingVsync) {
+-    gfxCriticalNote << "EL-Y2 VD observes source";
+     vsyncSource->AddVsyncDispatcher(this);
+   } else if (!needVsync && wasObservingVsync) {
+     vsyncSource->RemoveVsyncDispatcher(this);
+-- 
+2.56.0
+

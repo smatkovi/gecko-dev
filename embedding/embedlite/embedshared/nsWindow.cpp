@@ -225,7 +225,6 @@ nsWindow::PreRender(mozilla::widget::WidgetRenderingContext *aContext)
   MOZ_ASSERT(mWindow);
   Unused << aContext;
   if (!IsVisible() || !mActive) {
-    gfxCriticalNote << "EL-P PreRender gate vis=" << int(IsVisible()) << " act=" << int(mActive);
     if (!GetCompositorBridgeParent()) {
       return false;
     }
