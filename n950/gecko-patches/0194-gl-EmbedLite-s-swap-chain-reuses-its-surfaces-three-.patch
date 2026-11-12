@@ -1,0 +1,54 @@
+From 61b665a5b163a1a6dd5ff2e62547c6f36d12d292 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Thu, 12 Nov 2026 14:47:14 +0100
+Subject: [PATCH] gl: EmbedLite's swap chain reuses its surfaces, three of them
+
+SwapChain::Acquire compared the pooled surfaces' color space with the one
+requested (sRGB), but CreateShared() makes a factory without color spaces,
+like the EGLImage one, use Display. Every Acquire emptied the pool, so each
+frame created a framebuffer, texture and EGLImage and destroyed the
+previous ones, which the embedder could still be drawing (white views,
+the driver crash in ~MozFramebuffer) and which took seconds per frame on
+the PowerVR SGX530. On the N950, 91 frames instead of under 25 in the same
+swipe test, two framebuffers in turn.
+
+The pool holds three surfaces: the embedder draws the front buffer on its
+own render thread, which may still be at the previous frame when the next
+one starts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/gl/GLScreenBuffer.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/gfx/gl/GLScreenBuffer.cpp b/gfx/gl/GLScreenBuffer.cpp
+index 60d53c91854e..f95654ef8be9 100644
+--- a/gfx/gl/GLScreenBuffer.cpp
++++ b/gfx/gl/GLScreenBuffer.cpp
+@@ -28,7 +28,11 @@ UniquePtr<SwapChainPresenter> SwapChain::Acquire(
+     const auto& existingDesc = mPool.front()->mDesc;
+     auto newDesc = existingDesc;
+     newDesc.size = size;
+-    newDesc.colorSpace = colorSpace;
++    // CreateShared() makes a factory without color spaces use Display; a
++    // request for another space must not empty the pool on every frame.
++    newDesc.colorSpace = mFactory->SupportsCspaces()
++                             ? colorSpace
++                             : gfx::ColorSpace2::Display;
+     newDesc.transferFunction = transferFunction;
+     if (newDesc != existingDesc || !mPool.front()->IsValid()) {
+       mPool = {};
+@@ -150,7 +154,9 @@ SwapChain::SwapChain()
+        // #1646073.
+       mPoolLimit(
+ #ifdef MOZ_EMBEDLITE
+-          2
++          // The embedder draws the front buffer on its own render thread,
++          // which may still be at the previous frame when the next starts.
++          3
+ #else
+           kIsAndroid ? 4 : 0
+ #endif
+-- 
+2.56.0
+
