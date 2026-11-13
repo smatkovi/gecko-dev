@@ -1,0 +1,54 @@
+From 3bd75e4aa168206360d1313440713cbdd7befc57 Mon Sep 17 00:00:00 2001
+From: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Date: Fri, 13 Nov 2026 13:53:40 +0100
+Subject: [PATCH] webrender: an empty clip task address exact as a float
+
+Primitives without a clip mask carry the clip task address 0x7fffffff,
+which the shaders recognise as CLIP_TASK_EMPTY. On OpenGL ES 2.0 the
+instance integers reach the shaders as floats (from 16-bit halves), and
+0x7fffffff rounds to 2^31, whose conversion to int is undefined: on the
+PowerVR SGX530 the comparison failed now and then, do_clip() read a
+random render task as the clip area and text in whole picture tiles
+vanished. Use 0x7fff0000, exact as a float and far above any render
+task address, on both sides.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ gfx/wr/webrender/res/render_task.glsl | 4 +++-
+ gfx/wr/webrender/src/batch.rs         | 5 +++--
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/gfx/wr/webrender/res/render_task.glsl b/gfx/wr/webrender/res/render_task.glsl
+index 08cae9b186c9..db0692f9e4d9 100644
+--- a/gfx/wr/webrender/res/render_task.glsl
++++ b/gfx/wr/webrender/res/render_task.glsl
+@@ -77,7 +77,9 @@ PictureTask fetch_picture_task(int address) {
+     return task;
+ }
+ 
+-#define CLIP_TASK_EMPTY 0x7FFFFFFF
++// OPAQUE_TASK_ADDRESS in batch.rs; exactly representable as a float (GLSL ES
++// 1.00 gets instance integers as floats)
++#define CLIP_TASK_EMPTY 0x7FFF0000
+ 
+ struct ClipArea {
+     RectWithEndpoint task_rect;
+diff --git a/gfx/wr/webrender/src/batch.rs b/gfx/wr/webrender/src/batch.rs
+index 35cd07c6610d..e954ddad019e 100644
+--- a/gfx/wr/webrender/src/batch.rs
++++ b/gfx/wr/webrender/src/batch.rs
+@@ -41,8 +41,9 @@ use crate::segment::EdgeMask;
+ 
+ 
+ // Special sentinel value recognized by the shader. It is considered to be
+-// a dummy task that doesn't mask out anything.
+-const OPAQUE_TASK_ADDRESS: RenderTaskAddress = RenderTaskAddress(0x7fffffff);
++// a dummy task that doesn't mask out anything. Exact as a float: GLSL ES 1.00
++// gets instance integers as floats (render_task.glsl, CLIP_TASK_EMPTY).
++const OPAQUE_TASK_ADDRESS: RenderTaskAddress = RenderTaskAddress(0x7fff0000);
+ 
+ /// Used to signal there are no segments provided with this primitive.
+ pub const INVALID_SEGMENT_INDEX: i32 = 0xffff;
+-- 
+2.56.0
+
