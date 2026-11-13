@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <unistd.h>
+#include <time.h>
 #include "EmbedLog.h"
 
 #include "EmbedLiteCompositorBridgeParent.h"
@@ -278,6 +279,32 @@ EmbedLiteCompositorBridgeParent::PresentOffscreenSurface()
         }
         if (!getenv("EL_DUMP_RING")) ++sDumpN;
       }
+    }
+  }
+  // EL_TXT: per frame, dark (text) and blue (link) pixels in 8 bands from the top
+  if (getenv("EL_TXT") && !screen->Size().IsEmpty() && context->MakeCurrent()) {
+    const int w = screen->Size().width, h = screen->Size().height;
+    UniquePtr<uint8_t[]> px(new (fallible) uint8_t[size_t(w) * h * 4]);
+    if (px) {
+      context->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, context->GetDefaultFramebuffer());
+      context->fReadPixels(0, 0, w, h, LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE, px.get());
+      int dark[8] = {0}, blue[8] = {0};
+      for (int y = 0; y < h; ++y) {
+        const int band = ((h - 1 - y) * 8) / h;
+        const uint8_t* row = px.get() + size_t(y) * w * 4;
+        for (int x = 0; x < w; ++x) {
+          const int r = row[x * 4], g = row[x * 4 + 1], b = row[x * 4 + 2];
+          if (r > 180 && g < 100 && b > 180) ++dark[band];
+          else if (b > r + 60) ++blue[band];
+          else if (r < 120 && g < 120 && b < 120) ++dark[band];
+        }
+      }
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      fprintf(stderr, "EL-TXT %lld %d/%d %d/%d %d/%d %d/%d %d/%d %d/%d %d/%d %d/%d\n",
+              (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000,
+              dark[0], blue[0], dark[1], blue[1], dark[2], blue[2], dark[3], blue[3],
+              dark[4], blue[4], dark[5], blue[5], dark[6], blue[6], dark[7], blue[7]);
     }
   }
   LOGT("EL-ROT pre-publish fbo=%u front=%p gen=%llu", context->GetDefaultFramebuffer(), mFrontBuffer.get(), (unsigned long long)mPlatformImageGeneration);
