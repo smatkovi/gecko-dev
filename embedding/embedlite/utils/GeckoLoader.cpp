@@ -233,6 +233,17 @@ GeckoLoader::InitEmbedding(const char* aProfilePath)
   mozilla::Preferences::InitializeUserPrefs();
   mozilla::Preferences::FinishInitializingUserPrefs();
 
+  // The quota manager learns the profile directory from profile-do-change;
+  // IndexedDB opened before that fails for good (remote settings opened its
+  // database while the EmbedLite services below started up). XRE sends it
+  // once the profile is chosen, before any service can touch storage.
+  static const char16_t kStartup[] = {'s', 't', 'a', 'r',
+                                      't', 'u', 'p', '\0'};
+  nsCOMPtr<nsIObserverService> obsSvc = mozilla::services::GetObserverService();
+  if (obsSvc) {
+    obsSvc->NotifyObservers(nullptr, "profile-do-change", kStartup);
+  }
+
   // EmbedLite initializes XPCOM directly, so start only its own services here.
   // Gecko's app-startup category also contains toolkit services that expect
   // the full XRE_main profile startup sequence. Existing EmbedLite services
@@ -240,16 +251,10 @@ GeckoLoader::InitEmbedding(const char* aProfilePath)
   NS_CreateServicesFromCategory("embedlite-startup", nullptr,
                                 "app-startup", nullptr);
 
-  // XRE emits these after app-startup services are registered and profile prefs
-  // are ready. EmbedLite bypasses that startup path, but profile-aware services
-  // such as the ServiceWorker registrar, remote worker launcher, quota manager,
-  // and EmbedLite JS components still wait for the profile notifications before
-  // becoming usable.
-  nsCOMPtr<nsIObserverService> obsSvc = mozilla::services::GetObserverService();
+  // Profile-aware services such as the ServiceWorker registrar, remote worker
+  // launcher and EmbedLite JS components wait for this one before becoming
+  // usable.
   if (obsSvc) {
-    static const char16_t kStartup[] = {'s', 't', 'a', 'r',
-                                        't', 'u', 'p', '\0'};
-    obsSvc->NotifyObservers(nullptr, "profile-do-change", kStartup);
     obsSvc->NotifyObservers(nullptr, "profile-after-change", kStartup);
   }
 
