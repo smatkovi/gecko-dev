@@ -354,11 +354,19 @@ void
 EmbedLiteCompositorBridgeParent::WebRenderComposited()
 {
   LOGT("WebRenderComposited");
-  if (!PresentOffscreenSurface()) {
+  EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId);
+  // drawn into the embedder's native window: no platform image to publish
+  const bool direct = parentWindow && parentWindow->NativeWindow();
+  if (!direct && !PresentOffscreenSurface()) {
     return;
   }
+  // the offscreen path takes the office in PresentOffscreenSurface; without
+  // it ScheduleUpdate would find no compositor
+  if (direct && !parentWindow->GetCompositor()) {
+    parentWindow->SetCompositor(this);
+  }
 
-  if (EmbedLiteWindowParent* parentWindow = EmbedLiteWindowParent::From(mWindowId)) {
+  if (parentWindow) {
     parentWindow->GetListener()->CompositingFinished();
   }
 }

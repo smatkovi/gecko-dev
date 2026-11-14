@@ -8,6 +8,7 @@
 
 #include "mozilla/embedlite/PEmbedLiteWindowParent.h"
 #include "mozilla/WidgetUtils.h"
+#include "mozilla/Atomics.h"
 #include "EmbedLiteWindow.h"
 
 namespace mozilla {
@@ -45,6 +46,8 @@ public:
   bool WithPlatformImage(const PlatformImageCallback& callback);
   void ClearPlatformImage();
   EmbedLiteWindowListener *GetListener() const { return mListener; }
+  void SetNativeWindow(uintptr_t aWindow) { mNativeWindow = aWindow; }
+  uintptr_t NativeWindow() const { return mNativeWindow; }
 
 protected:
   friend class EmbedLiteCompositorBridgeParent;
@@ -71,6 +74,7 @@ private:
 
   gfxSize mSize;
   mozilla::ScreenRotation mRotation;
+  mozilla::Atomic<uintptr_t> mNativeWindow{0};
 
   DISALLOW_EVIL_CONSTRUCTORS(EmbedLiteWindowParent);
 };

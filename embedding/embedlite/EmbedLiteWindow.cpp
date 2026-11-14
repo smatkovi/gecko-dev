@@ -81,5 +81,10 @@ void EmbedLiteWindow::ClearPlatformImage()
   mWindowParent->ClearPlatformImage();
 }
 
+void EmbedLiteWindow::SetNativeWindow(uintptr_t aWindow)
+{
+  mWindowParent->SetNativeWindow(aWindow);
+}
+
 } // nemsapace embedlite
 } // namespace mozilla

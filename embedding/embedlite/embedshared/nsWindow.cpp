@@ -9,6 +9,7 @@
 
 #include "nsWindow.h"
 #include "EmbedLiteWindowChild.h"
+#include "EmbedLiteWindowParent.h"
 #include "EmbedLiteCompositorBridgeParent.h"
 #include "EmbedLiteApp.h"
 
@@ -173,6 +174,12 @@ nsWindow::GetNativeData(uint32_t aDataType)
     case NS_NATIVE_OPENGL_CONTEXT:
       return nullptr;
     case NS_NATIVE_WINDOW:
+      if (mWindow) {
+        if (EmbedLiteWindowParent* parent = EmbedLiteWindowParent::From(mWindow->GetUniqueID())) {
+          return reinterpret_cast<void*>(parent->NativeWindow());
+        }
+      }
+      return nullptr;
     case NS_NATIVE_GRAPHIC:
     case NS_NATIVE_SHELLWIDGET:
     case NS_NATIVE_WIDGET:

@@ -90,6 +90,10 @@ public:
   // synchronous callback. Consumers must import the handle before returning.
   virtual bool WithPlatformImage(const PlatformImageCallback& callback);
   virtual void ClearPlatformImage();
+  // An X11 window for WebRender to draw into directly instead of the
+  // platform image; set before the view's first paint. 0 keeps the
+  // platform image.
+  virtual void SetNativeWindow(uintptr_t aWindow);
 
 protected:
   friend class EmbedLiteApp;
